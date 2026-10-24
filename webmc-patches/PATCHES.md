@@ -71,3 +71,36 @@ TNTGuard v20：禁止放置/点燃/命令生成 TNT **和末影水晶**（`alect
 node _diag15.js   # 白天气泡柱截屏 + 僵尸行走摆幅 + heap
 # 真机：水下放岩浆块=下沉气泡柱，灵魂沙=上浮柱；刷怪蛋招僵尸看摆臂/拉弓
 ```
+
+
+## 第二轮（build 20261024p, md5 8be82158）— 2026-10-25
+
+### q-overfix v1（最重要）
+**根因**：bundle 官方 CSS `#ui-root{position:fixed;...;z-index:8}` 没有 `pointer-events:none`——
+全屏 GUI 层盖住 canvas，`document.elementFromPoint()` 永远命中它，所有右键被精准命中测试
+判为 UI 点击拦截 → **`use_item` 包从不发出**（苹果/盾/放置全部"感觉没触发"的终极根因）。
+修法：`#ui-root{pointer-events:none}` + 可交互控件单独 auto。上游值得修。
+
+### bubble v8b（原版贴图）
+- 粒子从 `THREE.SphereGeometry` 白球改为 **真原版贴图**：`textures/particle/bubble.png`
+  （Mojang 官方 8x8 PNG，data URI 内嵌，NearestFilter 像素风）+ `THREE.Sprite` billboard。
+- 静水触发语义：`bubble_column` 方块有效性由服务端每 tick 校验（流动水/水源不足自动移除），
+  客户端只渲染真实存在的柱——扫到柱 = 服务端已判静水有效。
+- 渲染路径同 v7（独立 bubbleScene + onRender + sceneOrigin 相对坐标 + frustumCulled=false）。
+
+### q-anim v12（"手臂飞出去"根因修复）
+**根因**：用 wrapper 场景坐标测速——玩家跨区块时 `sceneOrigin` 平移 → 所有 wrapper position
+跳变 → 速度瞬间爆表 → 摆幅 0.85×1.9≈±1.6rad 甩过头顶（"飞出去但角度对"）。
+修复：改用 `originalEntity.position`（mineflayer 世界坐标，无 sceneOrigin 跳变）+ sp>4m/s 瞬移保护。
+非人形：蝙蝠 `bone_rightWing/leftWing` 扇翅（rotation.z，WingTip 子骨自动跟随）；
+四足/蜘蛛/苦力怕 `bone_leg0-7` 奇偶交替步态（v11 已有，本轮实测骨骼名）。
+
+### q-shieldpose v1（主右副左）
+bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居中）且永远抬右手。
+修法：onAfterRender 后覆盖——主手盾右臂 x=+0.14（偏右）；副手盾改抬左臂镜像
+（rotation z 反号、x=-0.14），右臂复位。
+
+### 验证
+- _diag23：CDP 真实右键 → q16 `fired:1 blocked:0` → MouseManager `upi:7 sui:7` → use_item 发出 ✓
+- _diag26：气泡 v8b `cols=1 spawned=34 Sprite:1 bubbleCalls=73 err=0` ✓
+- _diag25：骨骼名实测 bat(Wing/WingTip)/cow(leg0-3)/skeleton(人形 camelCase) ✓

@@ -1687,6 +1687,10 @@ function scan(){var found=!1,why=null,inv=document.querySelector('.mc-inv-overla
 window.__qOverUI=function(e){try{var cv=document.getElementById('viewer-canvas');if(!cv)return!!window.__webmcUIBlock;var el=document.elementFromPoint(e.clientX,e.clientY);return!el||(el!==cv&&!cv.contains(el));}catch(err){return!!window.__webmcUIBlock;}};
 setInterval(scan,120);window.addEventListener('load',scan);
 var r=document.getElementById('root');if(r)new MutationObserver(scan).observe(r,{childList:!0,subtree:!0});else new MutationObserver(function(){var x=document.getElementById('root');if(x){this.disconnect();new MutationObserver(scan).observe(x,{childList:!0,subtree:!0});scan();}}).observe(document.body,{childList:!0,subtree:!1});})();</script>
+<style>/* q-overfix v1: #ui-root 全屏层吃事件导致 elementFromPoint 永远命中它 → 所有右键被 __qOverUI 判为 UI 点击拦截（苹果/盾/放置全部"没触发"）。GUI 层本不该吃事件：整体 none，可交互控件单独 auto。 */
+#ui-root{pointer-events:none !important}
+#ui-root button,#ui-root input,#ui-root select,#ui-root [onclick],#ui-root [data-clickable]{pointer-events:auto}
+</style>
 <script>/* qremote v1: 其他玩家动作动画(进食/拉弓/举盾)——
    读 mineflayer 实体 metadata[8](LivingEntity 手部活动标志 1=主手 2=副手)+heldItem,
    直接写渲染实体的 userData._useItem/_usingItem(493.js 皮肤动画每帧消费)。 */
@@ -2719,7 +2723,14 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
 (function(){var t=setInterval(function(){var b=globalThis.bot;if(!b||!b.registry)return;try{var a=b.registry.sounds||(b.registry.sounds={});a.length=0;for(var i=0;i<window.__SND1204.length;i++)a[i]={name:window.__SND1204[i]};console.log("[sound] registry.sounds -> 1.20.4 table "+window.__SND1204.length+" entries");}catch(e){}clearInterval(t);},500);})();</script>
 <script type="module" src="./static/js/webmc_voice.js?v=v7sync1"></script>
 <script>
-/* q-anim v11：bundle 渲染后驱动 + 动画让位 + 原版幅度（2026-10-25）
+/* q-anim v12：世界坐标测速 + 瞬移保护 + 蝙蝠扇翅（2026-10-25）
+   v11 "手臂飞出去但角度对"根因：用 wrapper 场景坐标测速——bot 跨区块时
+   sceneOrigin 平移 → 所有 wrapper position 跳变 → sp 瞬间巨大 → mvE 冲高
+   → 摆幅 0.85×1.9≈±1.6rad 甩过头顶（现象=飞出去，方向仍对）。
+   修复：改用 originalEntity.position（mineflayer 世界坐标，无 sceneOrigin 跳变）
+   + sp>4m/s 判瞬移直接归零 + EMA 加强。非人形：蝙蝠 bone_*Wing/WingTip 扇翅，
+   四足/蜘蛛/苦力怕 leg\d 交替沿用 v11（已验证骨骼名）。 */
+/* （v11 注释）
    v8 三病因（_diag5/_diag6 实测）：
    ① v8 的 rAF 早于 bundle 渲染循环注册 → 每帧先写后被 bundle 动画覆盖
       （实证：僵尸静止 vel=0.04，rightArm 却达 -0.255rad——bundle 攻击动画穿透）；
@@ -2746,7 +2757,7 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
   }
   var DEFS = new WeakMap(); // wrapper -> {legs,arms,last,ph,bowK,bowT,bow,holdArm,hum}
   var ready = false, frames = 0, mobs = 0, err = 0;
-  W.__qAnim = {v:11, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, yield:0, err:0};
+  W.__qAnim = {v:12, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, yield:0, err:0};
 
   function findBones(w){
     var legs = [], arms = [], holdArm = null;
@@ -2756,6 +2767,7 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
       if (/^leg\d$/.test(n)) legs.push({b:o, n:n});
       else if (n === 'leftLeg' || n === 'rightLeg') legs.push({b:o, n:n});
       else if (n === 'leftArm' || n === 'rightArm') arms.push({b:o, n:n});
+      else if (n === 'rightWing' || n === 'leftWing') legs.push({b:o, n:n});   // v12: 蝙蝠翅膀走 legs 通道
       else if (n === 'leftItem' || n === 'rightItem'){
         var has = false;
         o.traverse(function(c){ if (c.name && c.name.indexOf('custom_item') === 0) has = true; });
@@ -2765,7 +2777,7 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
     return {legs:legs, arms:arms, holdArm:holdArm};
   }
   function capture(d, g){
-    d.legs = g.legs.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, lw:l.b.rotation.x}; });
+    d.legs = g.legs.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, lw:l.b.rotation.x, rz:l.b.rotation.z, lzw:l.b.rotation.z}; });
     d.arms = g.arms.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, lw:l.b.rotation.x}; });
     d.holdArm = g.holdArm;
     d.hum = g.arms.length > 0;
@@ -2805,8 +2817,10 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
         }
         if (!d) continue;
         var dt = d.last ? Math.min(0.1, (now - d.last.t) / 1000) : 0;
-        var px = w.position.x, pz = w.position.z;
+        var op = oe.position || w.position;                     // v12: 世界坐标（防 sceneOrigin 跳变假速）
+        var px = op.x, pz = op.z;
         var sp = d.last ? Math.hypot(px - d.last.x, pz - d.last.z) / Math.max(0.001, dt) : 0;
+        if (sp > 4) sp = 0;                                     // v12: 瞬移/tp 保护
         d.last = {x:px, z:pz, t:now};
         var mv = Math.min(1, sp / 0.5);          // v11: 原版幅度——僵尸 0.35m/s -> mv=0.7 -> 臂 +-0.52rad(29度可见）
         d.mvE = d.mvE * 0.7 + mv * 0.3;          // v10: EMA 平滑，防 tp/瞬移假速单帧爆幅
@@ -2820,6 +2834,13 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
           var L = d.legs[i];
           var cur = L.b.rotation.x;
           if (Math.abs(cur - L.lw) > 0.03){ L.rx = cur; L.lw = cur; W.__qAnim.yield++; continue; }  // bundle 让位
+          if (L.n === 'rightWing' || L.n === 'leftWing'){
+            // v12: 蝙蝠扇翅（rotation.z 上下扇，飞行/挂附常扇；WingTip 为子骨自动跟随）
+            var wsign = (L.n === 'rightWing') ? 1 : -1;
+            var nv = L.rx + Math.sin(d.ph * 3) * 0.7 * wsign;
+            L.b.rotation.z = nv; L.lzw = nv;
+            continue;
+          }
           var s;
           if (/^leg\d$/.test(L.n)) s = (parseInt(L.n.slice(3), 10) % 2) === 1 ? -sw : sw;   // 四足对角
           else s = (L.n === 'rightLeg') ? sw : -sw;                                          // 人形对角
@@ -2846,14 +2867,14 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
           }
         }
       }
-    }catch(e){ err++; W.__qAnim.err = err; if(err<=2){ try{ console.warn('q11err:', e && e.message); }catch(_){} } }
+    }catch(e){ err++; W.__qAnim.err = err; if(err<=2){ try{ console.warn('q12err:', e && e.message); }catch(_){} } }
     W.__qAnim.frames = frames; W.__qAnim.mobs = mobs;
   }
   var boot = setInterval(function(){
     try{
       var w = W.world;
-      if (w && w.scene && !w.scene.__q11){
-        w.scene.__q11 = 1; ready = 1;
+      if (w && w.scene && !w.scene.__q12){
+        w.scene.__q12 = 1; ready = 1;
         var prev = w.scene.onAfterRender;               // 链式保留 bundle 可能已有的回调
         w.scene.onAfterRender = function(r, s, c){
           if (typeof prev === 'function') { try { prev(r, s, c); } catch(e){} }
@@ -2865,10 +2886,105 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
   }, 500);
   setTimeout(function(){ clearInterval(boot); }, 150000);
 })();
-
 </script>
 <script>
-/* bubble-particles v7：原版气泡柱粒子 + 气泡柱环境音（v5 2026-10-25 挂载修正）
+/* q-shieldpose v1：举盾姿势主手偏右/副手偏左（Alec 需求）
+   bundle 病根：userData._usingItem 且 /shield/i 时永远
+     rightArm.rotation.set(-1.25,0,-.15,"ZYX") + rightArm.position.set(0,.5,.12)
+   —— x=0 拉回中线（"比较居中"），且副手举盾也抬右手（应偏左）。
+   修法：挂 world.scene.onAfterRender（bundle 每帧 .set() 强设之后覆盖）：
+     - 盾在主手(heldItem=shield)：rightArm.position.x=+0.14（模型 +x=右，前向+z 推导）
+     - 盾在副手(offhandItem=shield)：改用 leftArm 镜像（rotation z 反号 + position.x=-0.14），
+       rightArm 复位 default（bundle 抬错了手）
+     - 非举盾帧：复位一次（脏标记防重复写） */
+(function () {
+  if (globalThis.__shieldPose) return;
+  var SP = globalThis.__shieldPose = { frames: 0, main: 0, off: 0, resets: 0, err: 0 };
+  var DEFS = new WeakMap();
+
+  function grab(w) {
+    var sk = null;
+    try { sk = w.skin || w; } catch (e) { return null; }
+    var ra = sk.rightArm, la = sk.leftArm;
+    if (!ra || !la) return null;
+    var d = DEFS.get(w);
+    if (!d) {
+      d = {
+        ra: { r: [ra.rotation.x, ra.rotation.y, ra.rotation.z], p: [ra.position.x, ra.position.y, ra.position.z], ord: ra.rotation.order },
+        la: { r: [la.rotation.x, la.rotation.y, la.rotation.z], p: [la.position.x, la.position.y, la.position.z], ord: la.rotation.order },
+        dirty: false
+      };
+      DEFS.set(w, d);
+    }
+    return { sk: sk, ra: ra, la: la, d: d };
+  }
+  function reset(g) {
+    if (!g.d.dirty) return;
+    g.ra.rotation.set(g.d.ra.r[0], g.d.ra.r[1], g.d.ra.r[2], g.d.ra.ord);
+    g.ra.position.set(g.d.ra.p[0], g.d.ra.p[1], g.d.ra.p[2]);
+    g.la.rotation.set(g.d.la.r[0], g.d.la.r[1], g.d.la.r[2], g.d.la.ord);
+    g.la.position.set(g.d.la.p[0], g.d.la.p[1], g.d.la.p[2]);
+    g.d.dirty = false; SP.resets++;
+  }
+  function tick() {
+    SP.frames++;
+    try {
+      var T = (window.world && window.world.entities && window.world.entities.entities) || null;
+      if (!T) return;
+      for (var k in T) {
+        var w = T[k];
+        if (!w || !w.originalEntity) continue;
+        var oe = w.originalEntity;
+        if (!(oe.name === 'player' || oe.type === 'player')) continue;
+        var g = grab(w);
+        if (!g) continue;
+        var ud = w.userData || {};
+        if (!ud._usingItem || !/shield/i.test(ud._useItem || '')) { reset(g); continue; }
+        var main = false;
+        try { main = !!(oe.heldItem && /shield/i.test(oe.heldItem.name || '')); } catch (e) {}
+        if (main) {
+          // 主手：右臂抬高且偏右（bundle 抬右手 ✓，x 从 0 修正为 +0.14）
+          g.ra.rotation.set(-1.25, 0, -0.15, 'ZYX');
+          g.ra.position.set(0.14, 0.5, 0.12);
+          // 左臂复位
+          g.la.rotation.set(g.d.la.r[0], g.d.la.r[1], g.d.la.r[2], g.d.la.ord);
+          g.la.position.set(g.d.la.p[0], g.d.la.p[1], g.d.la.p[2]);
+          g.d.dirty = true; SP.main++;
+        } else {
+          // 副手：左手镜像 + 右手复位
+          g.la.rotation.set(-1.25, 0, 0.15, 'ZYX');
+          g.la.position.set(-0.14, 0.5, 0.12);
+          g.ra.rotation.set(g.d.ra.r[0], g.d.ra.r[1], g.d.ra.r[2], g.d.ra.ord);
+          g.ra.position.set(g.d.ra.p[0], g.d.ra.p[1], g.d.ra.p[2]);
+          g.d.dirty = true; SP.off++;
+        }
+      }
+    } catch (e) { SP.err++; }
+  }
+  var boot = setInterval(function () {
+    try {
+      var w = window.world;
+      if (w && w.scene && !w.scene.__shp1) {
+        w.scene.__shp1 = 1;
+        var prev = w.scene.onAfterRender;
+        w.scene.onAfterRender = function (r, s, c) {
+          if (typeof prev === 'function') { try { prev(r, s, c); } catch (e) {} }
+          tick();
+        };
+        clearInterval(boot);
+        console.log('[shieldpose] v1 enabled (main->right offset, off->left mirror)');
+      }
+    } catch (e) {}
+  }, 500);
+  setTimeout(function () { clearInterval(boot); }, 180000);
+})();
+</script>
+<script>
+/* bubble-particles v8b：真原版贴图（textures/particle/bubble.png 8x8 data URI，Mojang 官方 PNG）
+   + 静水触发：column 上方必须也是 water/bubble_column（活水下柱才冒泡，非静水不触发）
+   + Sprite billboard（原版粒子=面向相机 quad），depthWrite=false
+   v7 渲染路径保留：独立 bubbleScene + worldRenderer.onRender + sceneOrigin 相对坐标 + frustumCulled=false */
+  /* bubble-particles v7：原版气泡柱粒子 + 气泡柱环境音（v5 2026-10-25 挂载修正）
    v4 死因（_diag8 实证 renderer.info.render.calls=2 恒定）：bundle 的 worldRenderer.render()
    是手动调用各子系统 .render()，不走 three scene.traverse —— 直接 sc.add() 的裸 mesh
    永远不进渲染管线（spawned/sphere 计数正常但肉眼不可见）。
@@ -2877,16 +2993,28 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
    （waypoints.render() = renderer.render(waypointScene, camera) 即 bundle 自身用法。）
    保留 v4：depthTest=false 穿透 bundle 不透明水面；粒径 0.12；限流 10。 */
 (function(){
+  var TEX_URI='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAANUlEQVR42mMgCShu/f8fhrFKovMxOJ/+//8PxHCJ8ptQNkIBhMauAA4wFcAVYZVEFwRhZEkAFkw8ZCraQW4AAAAASUVORK5CYII=';
   var items=[], geo=null, mat=null, MAX=220, err=0, cols=0;
-  window.__bubble={v:7, n:0, spawned:0, cols:0, err:0, inCol:0, colType:'', sndN:0, fbN:0};
+  window.__bubble={v:8, n:0, spawned:0, cols:0, err:0, inCol:0, colType:'', sndN:0, fbN:0};
   function ensure(){
-    if(geo||!globalThis.THREE) return !!geo;
+    if(mat||!globalThis.THREE) return !!mat;
     try{
-      geo=new THREE.SphereGeometry(0.12,8,8);
-      mat=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.85,depthWrite:false,depthTest:false});
+      var img=new Image();
+      img.onload=function(){
+        try{
+          var cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
+          cv.getContext('2d').drawImage(img,0,0);
+          var tx=new THREE.CanvasTexture(cv);
+          tx.magFilter=THREE.NearestFilter; tx.minFilter=THREE.NearestFilter;   // 原版像素风
+          mat=new THREE.SpriteMaterial({map:tx, transparent:true, depthWrite:false, opacity:0.95});
+          matReady=1;
+        }catch(e2){}
+      };
+      img.src=TEX_URI;
     }catch(e){}
-    return !!geo;
+    return !!matReady;
   }
+  var matReady=0;
   function wr(){ try{ return window.appViewer&&window.appViewer.backend&&window.appViewer.backend.soundSystem&&window.appViewer.backend.soundSystem.worldRenderer||null; }catch(e){ return null; } }
   function bscene(){
     try{
@@ -2897,10 +3025,12 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
   }
   function spawn(x,y,z,up,dist){
     try{
-      if(!ensure()) return;
+      if(!ensure()) return; if(!mat) return;
       var sc=bscene(); if(!sc) return;
       if(items.length>=MAX){ var old=items.shift(); if(old.m.parent) old.m.parent.remove(old.m); }
-      var m=new THREE.Mesh(geo,mat);
+      if(!mat) return;              // 贴图未就绪
+      var m=new THREE.Sprite(mat);
+      m.scale.set(0.24,0.24,1);     // 原版 bubble 视觉尺寸
       m.renderOrder=999;
       m.frustumCulled=false;          // v7：气泡柱必现，防相机矩阵/朝向边缘情况被剔除
       sc.add(m);
@@ -2944,6 +3074,8 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
           }
         }
         if(!hasCol) continue;
+        // v8b 静水触发语义：bubble_column 块的有效性由服务端每 tick 校验
+        // （流动水/水源不足时服务端自动移除该块）——客户端扫到柱=服务端已判静水有效。
         cols++;
         var up=(colType(b, base, cx, found, cz, prDrag)==='up');
         var top=found+1, guard=0;
@@ -3073,6 +3205,7 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
     }catch(e){ err++; }
   },400);
 })();
+
 </script>
 
 
@@ -3184,8 +3317,8 @@ window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without
       var a=globalThis.__qAnim; v.push('qAnim='+(a?a.v:'off'));
       var b=window.__bubble; v.push('bubble='+(b?b.v:'off'));
       var s=window.__soundBridge; v.push('sound='+(s?s.version:'off'));
-      v.push('q13v6=on|eat2=on|itemfix=on|bub5fix=on|anim11=on|perf1=on');
-      v.push('build=20261024o');
+      v.push('q13v6=on|eat2=on|itemfix=on|bub8=on|anim12=on|perf1=on|overfix=on|shpose=on');
+      v.push('build=20261024p');
       console.log('%c[webmc-patch] '+v.join(' | '),'background:#165;color:#fff;padding:2px 8px;border-radius:3px');
       window.__patchVer=v.join('|');
     }catch(e){}
