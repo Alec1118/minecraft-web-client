@@ -1,0 +1,3197 @@
+<!DOCTYPE html>
+<!-- 本页面基于 zardoy/minecraft-web-client (https://github.com/zardoy/minecraft-web-client) 官方发布版本修改，遵循 MIT License。
+     原作者版权声明见 ./static/js/493.ba515e7e.js.LICENSE.txt（必须保留，不得删除或修改）。
+     上游更新需定期同步（release 逐版核对 changelog）。 -->
+<html>
+  <head>
+<script>
+(function(){try{
+  var OLD='minecraft.aialec.cn/mcws',WRONG='aii'+'alec.cn/mcws',NEW='aialec.cn/mcws',KEY='__addrMigrated2';
+  function swap(a,b,v){return v.split(a).join(b);}
+  var touched=false;
+  for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
+    if(!k)continue;var v=localStorage.getItem(k);
+    var nv=v;
+    if(nv.indexOf(OLD)>=0)nv=swap(OLD,NEW,nv);
+    if(nv.indexOf(WRONG)>=0)nv=swap(WRONG,NEW,nv);
+    if(nv!==v){localStorage.setItem(k,nv);touched=true;}}
+  if(touched||!localStorage.getItem(KEY)){
+    localStorage.setItem(KEY,'1');
+    if(window.caches&&caches.keys){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}
+  }
+}catch(e){}})();
+</script>
+<!-- perf-auto --><script>
+/* AiAlec perf-auto v5 (2026-10-08) +动态渲染距离降级：DPR 见底后降 renderDistance(防卡死)，FPS 恢复再回弹 */
+(function(){
+  var Q=new URLSearchParams(location.search);
+  var mode=Q.get('perf');
+  if(mode==='off'){ window.__perfAuto={mode:'off',ver:'v4'}; return; }
+
+  // ---------- 1. 探测设备 ----------
+  var cores=navigator.hardwareConcurrency||4;
+  var memGB=navigator.deviceMemory||4;
+  var rawDPR=window.devicePixelRatio||1;
+  var mobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+  var gpu='unknown', software=false, discrete=false;
+  try{
+    var cv=document.createElement('canvas');
+    var gl=cv.getContext('webgl2')||cv.getContext('webgl');
+    if(gl){
+      var dbg=gl.getExtension('WEBGL_debug_renderer_info');
+      if(dbg) gpu=String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)||'');
+      software=/SwiftShader|Software|llvmpipe|Microsoft Basic/i.test(gpu);
+      discrete=/NVIDIA|GeForce|RTX|GTX|Radeon RX|Radeon Pro|Apple M\d|Arc A/i.test(gpu);
+      // ★释放探测用的 WebGL context，避免占用显存/context 配额
+      try{ var le=gl.getExtension('WEBGL_lose_context'); if(le) le.loseContext(); }catch(e){}
+    } else { software=true; }
+    cv=null; gl=null;
+  }catch(e){}
+
+  // ---------- 2. 分档（放宽，避免把正常机器误判成低档）----------
+  var score=0;
+  score += cores>=8?3 : cores>=6?2 : cores>=4?1 : 0;
+  score += memGB>=16?3 : memGB>=8?2 : memGB>=4?1 : 0;
+  if(discrete) score+=4;
+  if(software) score-=3;      // 原来 -4 太狠
+  if(mobile)   score-=1;
+  var tier = mode==='low'?0 : mode==='mid'?1 : mode==='high'?2
+           : (score>=6?2 : score>=3?1 : 0);
+
+  // ★v4 关键：不再把 worker 压到 1（区块网格生成会慢到卡），渲染距离也不再压到 3~4
+  var DPR_CAP=[1.0, 1.25, 1.5][tier];
+  var WORKERS=[2, 2, 6][tier];
+  var DIST   =[6, 8, 10][tier];
+
+  // ---------- 3. DPR 钳制（唯一必须早于渲染器执行的补丁）----------
+  var _cap=DPR_CAP;
+  if(rawDPR>DPR_CAP){
+    try{
+      Object.defineProperty(window,'devicePixelRatio',{
+        configurable:true, enumerable:true,
+        get:function(){ return Math.min(rawDPR,_cap); },
+        set:function(){}
+      });
+    }catch(e){}
+  }
+  window.__perfAutoSetCap=function(v){ _cap=v; };
+  window.__perfAutoCap=DPR_CAP;
+
+  // ---------- 4. 设置注入（★只补默认值，绝不覆盖用户已改的项）----------
+  var changes=[], S=null, autoDist=false;
+  function set(k,v){
+    try{
+      if(!S) S=window.settings||window.options;
+      if(!S||S[k]===v) return false;
+      S[k]=v; changes.push(k+'='+v); return true;
+    }catch(e){ return false; }
+  }
+  function apply(){
+    S=window.settings||window.options;
+    if(!S) return false;
+    if(S.rendererWorldPerformance==='normal')
+      set('rendererWorldPerformance', tier>=2?'maximum':'normal');   // 低中档保持 normal
+    if(!S.rendererMeshersCountOverride && tier>=2)
+      set('rendererMeshersCountOverride', WORKERS);                  // 只在高档设 worker 数
+    // ★v5: 不再强制 gpuPreference（混合显卡切换会造成标题页/菜单动画顿挫）
+    //        并把之前版本强行写入的 high-performance 一次性恢复
+    try{
+      if(S.gpuPreference==='high-performance' && !localStorage.getItem('__perfGpuReverted')){
+        set('gpuPreference','default');
+        localStorage.setItem('__perfGpuReverted','1');
+        console.log('[perf] gpuPreference force reset restored to default');
+      }
+    }catch(e){}
+    // ★只在「完全没设置过」时才给渲染距离，绝不覆盖用户偏好
+    if(S.renderDistance==null){ set('renderDistance', DIST[tier]); autoDist=true; }
+    return true;
+  }
+
+  // ---------- 5. 看门狗（DPR 见底后降 renderDistance，FPS 恢复再回弹）----------
+  var frames=0, t0=performance.now(), boot=performance.now(), distDrops=0, distRaise=0;
+  var badStreak=0, goodStreak=0, CAP_FLOOR=0.75, drops=0, avgFps=0;
+  function loop(){
+    frames++;
+    var now=performance.now(), dt=now-t0;
+    if(dt>=3000){
+      avgFps=frames*1000/dt; frames=0; t0=now;
+      if(now-boot<25000){ requestAnimationFrame(loop); return; }   // 25s 宽限期
+      // ★v5: 只在真正进入世界后才调 DPR。标题页/菜单里改 DPR 会触发画面重建，
+      //      正是"标题页背景动画顿挫"的来源
+      if(!(window.bot && window.bot.entity)){ badStreak=0; goodStreak=0; requestAnimationFrame(loop); return; }
+      var low = tier>=2?32 : tier>=1?26 : 20;
+      var high= tier>=2?55 : tier>=1?48 : 42;
+      var DIST_FLOOR=[5,7,8][tier];
+      if(avgFps<low){
+        goodStreak=0;
+        if(++badStreak>=3){
+          if(_cap>CAP_FLOOR){ _cap=Math.max(CAP_FLOOR,_cap-0.25); drops++; }   // 先降 DPR
+          else if(autoDist){ var d=(S&&S.renderDistance)||0;                     // DPR 见底再降渲染距离（★合理削弱，防卡死）
+            if(d>DIST_FLOOR){ try{S.renderDistance=d-1;}catch(e){} distDrops++; } }
+          badStreak=0;
+        }
+      } else if(avgFps>high){
+        badStreak=0;
+        if(_cap<DPR_CAP && ++goodStreak>=4){ _cap=Math.min(DPR_CAP,_cap+0.25); goodStreak=0; }
+        else if(autoDist && ++goodStreak>=6){ var d=(S&&S.renderDistance)||0;   // DPR 已满再回弹渲染距离
+          if(d<DIST[tier]){ try{S.renderDistance=d+1;}catch(e){} distRaise++; } goodStreak=0; }
+      } else { badStreak=0; goodStreak=0; }
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 6. 轮询装设置 ----------
+  var tries=0;
+  var iv=setInterval(function(){ if(apply()||++tries>200) clearInterval(iv); },50);
+
+  // ---------- 7. 诊断 ----------
+  window.__perfAuto={
+    ver:'v5', tier:tier, cores:cores, memGB:memGB, gpu:gpu,
+    discrete:discrete, software:software, mobile:mobile,
+    dprRaw:rawDPR, dprCap:DPR_CAP, workers:WORKERS,
+    dist:DIST[tier], changes:changes, distDrops:distDrops, distRaise:distRaise,
+    get drops(){return drops;}, get avgFps(){return avgFps;},
+    get appliedCap(){return _cap;}, get distNow(){return S&&S.renderDistance;},
+    log:function(){ try{console.log('[perf]',this);}catch(e){} return this; }
+  };
+  if(mode==='debug') setTimeout(function(){ try{console.log('[perf] v4 ready',window.__perfAuto);}catch(e){} },1500);
+})();
+</script>
+<!-- perf-adapt --><script>
+/* AiAlec 设备自适应 v1 (2026-09-15)
+   在 perf-auto 之上做「按这台机器算」：
+   1) 读真实 GPU 型号（WEBGL_debug_renderer_info）→ 分类 software / integrated / discrete
+   2) 进世界前先按 GPU 归类给一个初始 DPR 上限
+   3) 进世界后做一次 10 秒帧率校准，按帧率中位数再微调，并把上限真正应用到渲染器
+   诊断：__perfAdapt */
+(function(){
+  var A = window.__perfAdapt = {ver:'v1', gpu:'?', kind:'?', base:null, cap:null, calib:null, applied:0, renderer:'?', notes:[]};
+
+  function probeGL(){
+    var out={gpu:'?',kind:'unknown',ver:'?'};
+    try{
+      var c=document.createElement('canvas');
+      var gl=c.getContext('webgl2')||c.getContext('webgl');
+      if(!gl){ out.kind='none'; return out; }
+      var ext=gl.getExtension('WEBGL_debug_renderer_info');
+      out.gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '(no debug ext)';
+      out.ver = String(gl.getParameter(gl.VERSION)||'').slice(0,40);
+      out.kind = /swiftshader|llvmpipe|softwarerasterizer|software|basic render|mesa offscreen|virtualbox|vmware/i.test(out.gpu) ? 'software'
+               : /nvidia|geforce|rtx|gtx|quadro|radeon rx|radeon pro|arc a\d|apple m\d/i.test(out.gpu) ? 'discrete'
+               : /intel|uhd|iris|hd graphics|vega|radeon graphics|mali|adreno|powervr|apple gpu/i.test(out.gpu) ? 'integrated'
+               : 'unknown';
+      try{ var l=gl.getExtension('WEBGL_lose_context'); if(l) l.loseContext(); }catch(e){}
+    }catch(e){ out.gpu='err:'+e.message; }
+    return out;
+  }
+  A.probe = probeGL(); A.gpu = A.probe.gpu; A.kind = A.probe.kind;
+
+  var KIND_CAP = { software:0.75, none:0.75, integrated:1.0, unknown:1.0, discrete:1.5 };
+  function setCap(v){
+    try{ A.cap=v; if(window.__perfAutoSetCap) window.__perfAutoSetCap(v); A.applied++; }catch(e){}
+  }
+  function applyToRenderer(){
+    var v=window.devicePixelRatio, used='none', cands=[];
+    try{ if(window.renderer) cands.push(window.renderer); }catch(e){}
+    try{ if(window.appViewer&&window.appViewer.worldView) cands.push(window.appViewer.worldView); }catch(e){}
+    for(var i=0;i<cands.length;i++){
+      var r=cands[i];
+      if(r&&typeof r.setPixelRatio==='function'){
+        try{ r.setPixelRatio(v); used=(r.type||'renderer'); break; }catch(e){}
+      }
+    }
+    A.renderer=used; return used;
+  }
+
+  // ① 进世界前先定初始上限（渲染器创建时会读 window.devicePixelRatio）
+  var iv=setInterval(function(){
+    if(window.__perfAuto && A.base===null){ A.base = window.__perfAuto.dprCap; }
+    if(window.__perfAutoSetCap){
+      setCap(KIND_CAP[A.kind]);
+      A.notes.push('初始上限 ' + KIND_CAP[A.kind] + '（GPU 类型 ' + A.kind + '）');
+      clearInterval(iv);
+    }
+  }, 120);
+
+  // ② 进世界后 10 秒校准
+  var gaps=[], last=0, started=0, done=false;
+  function loop(t){
+    requestAnimationFrame(loop);
+    var inWorld = !!(window.bot && window.bot.entity && window.world && window.world.scene);
+    if(!inWorld){ gaps.length=0; started=0; last=t; done=false; A.settle=0; return; }
+    if(done) return;
+    if(!started){
+      if(!A.settle){ A.settle=t; return; }          // ★q18: 进世界后先稳 5s，避开 atlas/chunk 加载高峰
+      if(t-A.settle<5000){ last=t; return; }
+      started=t; gaps.length=0; last=t; return;
+    }
+    if(last) gaps.push(t-last);
+    last=t;
+    if(t-started>=10000 && gaps.length>60){
+      done=true;
+      var s=gaps.slice().sort(function(a,b){return a-b;});
+      var med=s[Math.floor(s.length/2)], p90=s[Math.floor(s.length*0.9)];
+      var fps=1000/med, cap=A.cap||1;
+      A.calib={fps:+fps.toFixed(1), med:+med.toFixed(1), p90:+p90.toFixed(1), samples:gaps.length};
+      if(fps<5){ A.notes.push('校准值 '+fps.toFixed(1)+'fps 过低，疑似加载干扰，保持 '+cap); }
+      else if(fps<28 && cap>0.6){ cap=Math.max(0.6, cap-0.25); A.notes.push('校准偏低 '+fps.toFixed(0)+'fps → 上限 '+cap); }
+      else if(fps>58 && cap<1.5){ cap=Math.min(1.5, cap+0.25); A.notes.push('校准充足 '+fps.toFixed(0)+'fps → 上限 '+cap); }
+      else { A.notes.push('校准合适 '+fps.toFixed(0)+'fps → 保持 '+cap); }
+      setCap(cap);
+      var r=applyToRenderer();
+      console.log('[perf-adapt] GPU=' + A.gpu.slice(0,60) + ' | type=' + A.kind + ' | calibrated fps=' + fps.toFixed(1) +
+                  ' (中位 ' + med.toFixed(1) + 'ms, p90 ' + p90.toFixed(1) + 'ms) | DPR 上限=' + cap + ' | 应用渲染器=' + r);
+    }
+  }
+  requestAnimationFrame(loop);
+  console.log('[perf-adapt] v1 enabled | GPU=' + A.gpu.slice(0,70) + ' | type=' + A.kind);
+})();
+</script><!-- /perf-auto -->
+
+
+
+<!-- qworld: 服务器在 join/切世界时下发 §8[W]<世界名>（SkyIsland.onWorldChange），客户端记录为当前世界，光柱 addKnown/tick 全用它判定 -->
+<script>(function(){ var n=0, t=setInterval(function(){ var b=globalThis.bot; if(!b) return; if(b.__qwHooked){ clearInterval(t); return; } if(++n>600){ clearInterval(t); return; } b.__qwHooked=1; clearInterval(t);
+  try{ b.on('message', function(msg){ try{ var s=(typeof msg==='string')?msg:String(msg); var m=s.match(/(?:§8)?\[W\](\S+)/); if(m) window.__qWorld=m[1];
+    var mb=s.match(/\[BEAM\](-?\d+),(-?\d+),(-?\d+),([^,\s]+),(-?\d+)/);   // ★uib25: 服务器权威信标判定（TNTGuard.beaconScan 下发，原版底座规则在服务端算）
+    if(mb){ window.__srvBeacons=window.__srvBeacons||{}; window.__srvBeaconsNW=window.__srvBeaconsNW||{}; var bk=mb[1]+','+mb[2]+','+mb[3]+','+mb[4]; var nk=mb[1]+','+mb[2]+','+mb[3]; var blv=parseInt(mb[5],10);
+      if(blv>0){ window.__srvBeacons[bk]=blv; window.__srvBeaconsNW[nk]=blv; } else { delete window.__srvBeacons[bk]; delete window.__srvBeaconsNW[nk]; }
+      try{ console.log('[BEAM] beacon signal received',bk,'lv='+blv); }catch(e){}
+      try{ if(window.__beam){ window.__beam.force=1; } }catch(e){} }
+  }catch(e){} }); try{ b._client.on('custom_payload', function(p){ try{ if(p&&p.channel==='alec:beam'&&p.data){var s2=p.data.toString(); var mb=s2.match(/\[BEAM\](-?\d+),(-?\d+),(-?\d+),([^,\s]+),(-?\d+)/);if(mb){ window.__srvBeacons=window.__srvBeacons||{}; window.__srvBeaconsNW=window.__srvBeaconsNW||{}; var bk=mb[1]+','+mb[2]+','+mb[3]+','+mb[4];var nk=mb[1]+','+mb[2]+','+mb[3];var blv=parseInt(mb[5],10); if(blv>0){window.__srvBeacons[bk]=blv;window.__srvBeaconsNW[nk]=blv;}else{delete window.__srvBeacons[bk];delete window.__srvBeaconsNW[nk];}console.log('[BEAM] plugin-msg beacon',bk,'lv='+blv);try{ if(window.__beam){ window.__beam.force=1; } }catch(e){} } } }catch(e){} }); }catch(e){}
+      console.log('[qworld] world name signal hooked'); }catch(e){} },500); })(); </script>
+<!-- lightfix-v24: update_light -> worldView.loadChunk(pos,true) 重发整列（含新光照）→ mesher 换新列数据重网格。
+     真因链：update_light 只写 bot.world（mineflayer blocks 插件注入）；渲染器/mesher 的列副本只在 addColumn（postMessage chunk）时刷新；
+     上游 loadChunk(isLightUpdate) 机制（重发整列+setSectionDirty+跳过邻居列）无人调用（listenToBot 桥断裂，与 blockUpdate 断桥同根因）。
+     v22 的 world.lightUpdate=setSectionDirty 只发 {type:dirty} 给 mesher → 用旧列副本重网格 → 光照不更新（Alec: "光照延时还是有的"）。
+     v24（Alec 10-22 实测反馈）：服务端光照 BFS 分 tick 批次推 update_light，v23 250ms 合批窗只圈得住前几批 → 视觉呈"正方形扩散"波浪式一块块亮；
+     且挖/放频繁时 mesher 持续整列重网格致画面卡。改为：400ms 合批 + 静默顺延（120ms 无新包才发，等 BFS 收齐，上限 1.5s）
+     + 同列 1s 最小重发间隔（连续挖放时限流保 mesher）。仅对已加载列生效；loadChunk 不可用/零命中回退 lightUpdate。 -->
+<script>(function(){ var n=0,t=setInterval(function(){ var b=globalThis.bot; if(!b||!b._client||!b._client.on) return; if(b.__alecLit){ clearInterval(t); return; } if(++n>600){ clearInterval(t); return; } b.__alecLit=1; clearInterval(t);
+  try{
+    var pend={}, tm=0, lastArr=0, startT=0, lastSent={};
+    var LIT={bat:0,col:0,def:0,hold:0}; window.__fastLit=LIT;
+    function wv(){ try{ var w=globalThis.world; if(w&&w.displayOptions&&w.displayOptions.worldView&&typeof w.displayOptions.worldView.loadChunk==='function') return w.displayOptions.worldView; }catch(e){}
+      try{ var a=window.appViewer; if(a&&a.worldView&&typeof a.worldView.loadChunk==='function') return a.worldView; }catch(e){} return null; }
+    function flush(){
+      tm=0;
+      var now=Date.now();
+      if(now-lastArr<120 && now-startT<1500){ LIT.def++; tm=setTimeout(flush,120); return; }
+      var list=[]; for(var k in pend){ list.push(pend[k]); } pend={};
+      var v=wv(), w=globalThis.world, ok=0;
+      for(var i=0;i<list.length;i++){
+        var lx=list[i][0], lz=list[i][1], kk=lx+','+lz;
+        if(!v||!v.loadedChunks||!v.loadedChunks[kk]) continue;
+        if(lastSent[kk]&&now-lastSent[kk]<1000){ pend[kk]=[lx,lz]; LIT.hold++; continue; }
+        try{ var pr=v.loadChunk({x:lx,z:lz}, true, 'lightfix'); if(pr&&pr.catch) pr.catch(function(){}); lastSent[kk]=now; ok++; LIT.col++; }catch(e){}
+      }
+      LIT.bat++;
+      if(!ok&&w&&typeof w.lightUpdate==='function'){
+        for(var j=0;j<list.length;j++){ try{ w.lightUpdate(list[j][0]*16, list[j][1]*16); }catch(e){} }
+      }
+      startT=0;
+      for(var k2 in pend){ if(!tm){ tm=setTimeout(flush,1000); break; } }
+    }
+    b._client.on('update_light', function(p){
+      try{
+        if(!p) return;
+        var cx=p.chunkX, cz=p.chunkZ;
+        if(typeof cx!=='number'||typeof cz!=='number') return;
+        lastArr=Date.now();
+        if(!startT) startT=lastArr;
+        pend[cx+','+cz]=[cx,cz];
+        if(!tm) tm=setTimeout(flush,400);
+      }catch(e){}
+    });
+    console.log('[lightfix] v24 update_light -> worldView.loadChunk(isLightUpdate) 已接线');
+  }catch(e){}
+}, 500); })(); </script>
+    <!-- beam-boot --><script>
+(function(){
+  var TAG='[光柱]';
+  function log(){try{console.log.apply(console,[TAG].concat([].slice.call(arguments)))}catch(e){}}
+  log('beacon v21d 已加载（修复：去 bot.entity 硬依赖 / 慢机器可见 / 8s 扫描 / 贴图回退）');
+
+  var S={THREE:null,scene:null,tex:null,beams:{},last:0,tick:0,tried:0,timer:0,hooked:0};
+  var R_IN=0.2, R_OUT=0.25, MAX_H=320;
+  var OP_IN=1.0, OP_OUT=1.0;
+
+  var BASE={iron_block:1,gold_block:1,diamond_block:1,emerald_block:1,netherite_block:1};
+  // ★v16: 用方块自带的 transparent 属性判断（与游戏数据一致），不再靠硬编码正则
+  // ★v17: 严格对齐原版 BlockTags.BEACON_TRANSPARENT 的语义
+  // 只用「确实完全透光」的方块；不依赖 transparent 属性（草的 transparent 也是 true，会误判）
+  // ★v21 对齐原版 minecraft:beacon_transparent 语义：
+  //   只有「完全透光」的方块放行；其余（草方块/半砖/楼梯/栅栏/火把/树叶…）一律阻挡
+  var CLEAR_FULL = new Set([
+    'air','cave_air','void_air','water','lava','bubble_column',
+    'ice','packed_ice','blue_ice','frosted_ice',
+    'barrier','light','structure_void','beacon',
+    'iron_bars','spawner','dragon_egg','end_portal_frame','ender_chest',
+    'enchanting_table','piston','sticky_piston','piston_head',
+    'cauldron','water_cauldron','lava_cauldron','powder_snow_cauldron',
+    'cobweb','tripwire','lever','ladder','snow'
+  ]);
+  function isClear(b){
+    if(!b) return true;                       // ★数据未到 → 不算阻挡（否则区块重载会让光柱乱闪）
+    var n = String(b.name||'').toLowerCase();
+    if(!n) return true;
+    if(CLEAR_FULL.has(n)) return true;
+    if(n.indexOf('glass') >= 0) return true;  // 玻璃 / 染色玻璃 / 玻璃板
+    if(/_head$|_skull$|_banner$/.test(n)) return true;
+    return false;                             // 其余一律视为阻挡
+  }
+
+  function init(){
+    var T=window.THREE||window.__THREE__;   // ★v21d：兼容 globalThis.__THREE__ 暴露方式
+    if(!T) return 'no-THREE';
+    var w=window.world;
+    if(!w||!w.scene) return 'no-world';
+    S.THREE=T;S.scene=w.scene;
+    S.bot=window.bot||globalThis.bot||null;
+    log('★ 就绪 | THREE r'+T.REVISION+' | scene children='+w.scene.children.length+
+        ' | bot='+(S.bot?'yes':'no')+' | 区块='+(w.sectionObjects?Object.keys(w.sectionObjects).length:'?'));
+    return 'ok';
+  }
+
+  function loadTex(){
+    var T=S.THREE;
+    var URLS=['/textures/entity/beacon_beam.png','/mcassets/1.21.11/textures/entity/beacon_beam.png'];
+    (function tryOne(i){
+      if(i>=URLS.length){ log('贴图全部失败'); return; }
+      fetch(URLS[i],{cache:'force-cache'})
+        .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.blob();})
+        .then(function(b){return createImageBitmap(b);})
+        .then(function(bm){
+          var t=new T.Texture(bm);
+          t.wrapS=T.RepeatWrapping;t.wrapT=T.RepeatWrapping;
+          t.repeat.set(1,24);
+          try{ t.colorSpace=T.SRGBColorSpace; }catch(e){}
+          t.needsUpdate=true;
+          S.tex=t;log('贴图已加载',bm.width+'x'+bm.height,'@',URLS[i]);
+          startAnim();
+        })
+        .catch(function(e){ log('贴图失败@'+URLS[i]+':',e&&e.message); tryOne(i+1); });
+    })(0);
+  }
+
+  // 每 50ms（1 tick）更新旋转 + 纹理流动；不用 rAF，避免和渲染循环抢帧
+  function startAnim(){
+    if(S.timer) return;
+    var t0=performance.now();
+    S.timer=setInterval(function(){
+      var ticks=(performance.now()-t0)/50;
+      var f=ticks%40;
+      var rad=(f*2.25-45)*Math.PI/180;
+      for(var k in S.beams){ var bm=S.beams[k]; if(bm&&bm.spin){ try{ bm.spin.rotation.y=rad; }catch(e){} } }
+      if(S.tex){ try{ S.tex.offset.y=-(ticks*0.2)%1; }catch(e){} }
+    },50);
+  }
+
+  function makeBeam(x,y,z,h){
+    var T=S.THREE;
+    var outer=new T.Group();                    // ★ 只 track 外层（位置固定）
+    try{ if(window.world&&window.world.sceneOrigin&&window.world.sceneOrigin.track) window.world.sceneOrigin.track(outer); }catch(e){ log('track 失败:',e&&e.message); }
+    outer.position.set(x+0.5,y+1,z+0.5);
+    var spin=new T.Group();                     // ★ 旋转放在内层，不影响 outer
+    outer.add(spin);
+    function layer(r,op){
+      var g=new T.BoxGeometry(r*2,h,r*2);       // 方柱，每面各用完整纹理（同原版 uu1=0,uu2=1）
+      var m=new T.MeshBasicMaterial({map:S.tex,transparent:true,opacity:op,
+                                     depthWrite:false,side:T.DoubleSide,fog:false,
+                                     toneMapped:false});
+      var mesh=new T.Mesh(g,m);
+      mesh.position.y=h/2;mesh.frustumCulled=false;
+      return mesh;
+    }
+    spin.add(layer(R_IN,OP_IN));
+    spin.add(layer(R_OUT,OP_OUT));
+    try{S.scene.add(outer);}catch(e){log('add 失败:',e&&e.message);}
+    log('光柱已建 @',x,y,z,'| 高度',h,'| 半径 内',R_IN,'外',R_OUT,'| opacity',OP_IN+'/'+OP_OUT);
+    return {outer:outer,spin:spin};
+  }
+  function disposeObj(o){
+    if(!o) return;
+    try{ if(o.geometry&&o.geometry.dispose) o.geometry.dispose(); }catch(e){}
+    try{
+      if(o.material){
+        var ms=Array.isArray(o.material)?o.material:[o.material];
+        for(var i=0;i<ms.length;i++){
+          try{ if(ms[i].map&&ms[i].map!==S.tex&&ms[i].map.dispose) ms[i].map.dispose(); }catch(e){}
+          try{ ms[i].dispose(); }catch(e){}
+        }
+      }
+    }catch(e){}
+    try{ if(o.children) for(var j=0;j<o.children.length;j++) disposeObj(o.children[j]); }catch(e){}
+  }
+  function dropBeam(k){
+    var bm=S.beams[k];
+    try{ if(bm&&bm.outer) S.scene.remove(bm.outer); }catch(e){}
+    try{ disposeObj(bm&&bm.outer); }catch(e){}      // ★释放 geometry/material，防 GPU 资源泄漏
+    delete S.beams[k];
+  }
+
+  function inspect(bot,x,y,z){
+    // ★v21d：用普通 {x,y,z} 代替 bot.entity.position.constructor，去掉对 bot.entity 的硬依赖（慢机器/未进服时不会再卡死）
+    function at(xx,yy,zz){ try{ return bot.blockAt({x:xx,y:yy,z:zz}); }catch(e){ return null; } }
+    var self=at(x,y,z);
+    /* v21e: blockAt 偶发 null(列未就绪)不再判死 lit:null——信标存在性已由 findBlocks/blockUpdate 确认，
+       底座/光路各自独立乐观放行，等数据到位自然校正 */
+    /* Levels 检查移除：客户端信标方块实体数据不可靠，改由底座+光路判定 */
+    /* ★uib25 底座判定改服务器权威：TNTGuard.beaconScan 按原版规则算层数，下发 §8[BEAM]x,y,z,world,levels。
+       客户端 blockAt 在本服读不到底座数据(9/9 null)是历史顽疾，乐观放行又导致"放上去就亮"——全部废弃。
+       信号未到 → lit:null 挂起（信号 2 秒内必到）；层数 0 → 熄灭 */
+    var __lv=null;
+    try{ var __sb=window.__srvBeacons; if(__sb){ var __bk=x+','+y+','+z+','+curDim(); if(Object.prototype.hasOwnProperty.call(__sb,__bk)) __lv=__sb[__bk]; } }catch(e){}
+    // ★v22 无世界 key 回退：curDim() 与服务端世界名不一致时（多世界/AlecCity 等）仍能拿到层数
+    try{ if(__lv===null||__lv===undefined){ var __nw=window.__srvBeaconsNW; if(__nw){ var __nk=x+','+y+','+z; if(Object.prototype.hasOwnProperty.call(__nw,__nk)) __lv=__nw[__nk]; } } }catch(e){}
+    try{
+      if(__lv===null||__lv===undefined){
+        var _mb=globalThis.__mainBE;
+        if(_mb){ var _co=_mb[(x>>4)+','+(z>>4)];
+          if(_co){ var _be=_co[x+','+y+','+z];
+            if(_be&&_be.Levels!==undefined&&_be.Levels!==null){
+              var _Lv=_be.Levels; __lv=(typeof _Lv==='object'&&_Lv.value!==undefined)?_Lv.value:_Lv;
+            } } }
+      }
+    }catch(e){}
+    /* ★v22 第三数据源：主线程列 blockEntities——mineflayer map_chunk 时 setBlockEntity 已填充，
+       key=区块局部坐标 (x&15),y,(z&15)；form A 值=nbtData({value:{...}})，form B 值={value:{...,nbtData}}，双形态兼容 */
+    try{
+      if(__lv===null||__lv===undefined){
+        var _b2=globalThis.bot||window.bot; var _w2=_b2&&_b2.world;
+        var _col=_w2&&_w2.getColumn?_w2.getColumn(x>>4,z>>4):null;
+        if(_col&&_col.blockEntities){
+          var _k2=(15&x)+','+y+','+(15&z);
+          var _be2=_col.blockEntities[_k2];
+          if(_be2){
+            var _n2=(_be2.value&&_be2.value.nbtData)?_be2.value.nbtData:_be2;
+            var _Lv2=_n2&&_n2.value?_n2.value.Levels:(_n2&&_n2.Levels);
+            if(_Lv2!=null&&_Lv2!==undefined){ __lv=(typeof _Lv2==='object'&&_Lv2.value!==undefined)?_Lv2.value:_Lv2; }
+          }
+        }
+      }
+    }catch(e){}
+    if(__lv===null) return {lit:null, why:'等服务器信标判定'};
+    if(__lv<=0) return {lit:false, why:'底座无矿物层(服务器判定)'};
+    // ★正上方 Y 列：遇到「确定非透光」方块 → 熄灭（原版语义：不生成光柱）；数据未到 → 乐观跳过
+    var dbg=[], blocked=false, firstSolid=0, blockName='';
+    for(var ty=y+1;ty<=y+MAX_H;ty++){
+      var bb=at(x,ty,z);
+      if(!bb){ if(dbg.length<6) dbg.push(ty+':NULL'); continue; }
+      if(dbg.length<6) dbg.push(ty+':'+(bb.name||'?'));
+      if(!isClear(bb)){ blocked=true; firstSolid=ty; blockName=String(bb.name||'?'); break; }
+    }
+    if(S.tick%10===0) log('信标@'+x+','+y+','+z+' 采样:', dbg.join(' | '), blocked?('→ 被挡: '+blockName+' @y='+firstSolid+' → 熄灭'):('→ 无阻挡(服务器层数='+__lv+')'));
+    if(blocked) return {lit:false, why:blockName+'@'+firstSolid};
+    return {lit:true,h:MAX_H};
+  }
+
+  // ---------- v15 性能修复：信标集合增量维护，替代每 2 秒全图 findBlocks ----------
+  var KNOWN={}, LASTSCAN=Date.now()+10000, SCAN_MS=45000, SCAN_R=32, IDLE_MS=300, FIRST_SCAN=1;
+  var OFF={};
+  // ★只读诊断：控制台敲 __beam.dump() 看光柱/已知信标/扫描半径
+  window.__beam = S;
+  S.dump = function(){ return {beams:Object.keys(S.beams), known:Object.keys(KNOWN), off:Object.keys(OFF), scanR:SCAN_R, tick:S.tick, tex:!!S.tex}; };
+  S.light=function(x,y,z,h){var k=x+','+y+','+z;addKnown(x,y,z);OFF[k]=9;if(S.beams[k])dropBeam(k);S.beams[k]=makeBeam(x,y,z,h||320);S.beams[k].h=h||320;S.beams[k].forced=1;log('手动点亮',k);};
+  S.unlight=function(x,y,z){var k=x+','+y+','+z;if(S.beams[k])dropBeam(k);log('手动熄灭',k);};
+  S.why=function(x,y,z){var b=window.bot;if(!b)return 'no-bot';return inspect(b,x,y,z);};   // 光柱当前熄灭的连续确认计数
+  function curDim(){ try{ if(window.__qWorld) return window.__qWorld;   // ★uib23: 服务器切世界时下发的权威世界名优先
+    var b=window.bot||globalThis.bot; if(!b) return ''; var g=b.game||{}; return String(g.dimension||b.dimension||'').replace(/^minecraft:/,''); }catch(e){ return ''; } }
+  function addKnown(x,y,z){ try{ var pe=globalThis.bot&&globalThis.bot.entity&&globalThis.bot.entity.position; if(pe){ var ax=x-pe.x,ay=y-pe.y,az=z-pe.z; if(ax*ax+ay*ay+az*az>16384) return; } }catch(e){}   // ★uib21: 登记源头限 128 格——远处信标根本不进 KNOWN，杜绝跨世界光柱
+    var k=x+','+y+','+z; if(!KNOWN[k]) KNOWN[k]={x:x,y:y,z:z,dim:curDim()}; }
+  function delKnown(x,y,z){ var k=x+','+y+','+z; if(KNOWN[k]) delete KNOWN[k]; }
+  function hookUpdates(){
+    if(S.hooked) return;
+    var b=window.bot; if(!b||!b.on) return;
+    S.hooked=1;
+    try{
+      b.on('blockUpdate', function(o,nw){
+        try{
+          if(nw&&nw.name==='beacon'&&nw.position) addKnown(nw.position.x,nw.position.y,nw.position.z);
+          if(o&&o.name==='beacon'&&o.position) delKnown(o.position.x,o.position.y,o.position.z);
+          // ★v21 任意方块变动落在已知信标上方 → 立刻重查（原版反应只有几个 tick）
+          var p=(nw&&nw.position)||(o&&o.position);
+          if(p){ for(var kk in KNOWN){ var q=KNOWN[kk];
+            if(q.x===p.x&&q.z===p.z&&p.y>q.y){
+              S.force=1;
+              // ★v21b：该格变成透明/空气 → 视为一次「可重建」确认
+              //（客户端区块重发会让读到的方块反复回退，光靠轮询要等近 10 秒）
+              if(nw&&nw.name&&isClear(nw)) OFF[kk]=2;
+              break; } } }
+        }catch(e){}
+      });
+      try{ b.on('spawn', function(){ try{ for(var k in S.beams){ dropBeam(k); } KNOWN={}; OFF={}; log('维度切换/重生 → 信标缓存已清空'); }catch(e){} }); }catch(e){}
+      log('已挂 blockUpdate 增量监听');
+    }catch(e){ log('hook 失败:',e&&e.message); }
+  }
+  function bgScan(){
+    var b=window.bot; if(!b||!b.entity) return;
+    var t0=performance.now();
+    try{
+      var list=b.findBlocks({matching:function(x){return x&&x.name==='beacon';},maxDistance:SCAN_R,count:64});
+      for(var i=0;i<list.length;i++){ var p=list[i]; addKnown(p.x,p.y,p.z); }
+      var ms=performance.now()-t0;
+      // 自适应：扫描超过 120ms 就把半径砍半，避免下次再卡
+      if(ms>150&&SCAN_R>24){ SCAN_R=Math.max(24,SCAN_R>>1); log('扫描耗时',ms.toFixed(0)+'ms，半径自适应降为',SCAN_R); }
+    }catch(e){ log('扫描失败:',e&&e.message); }
+  }
+  function tick(){
+    if(!S.tex) return;
+    var bot=window.bot||globalThis.bot; if(!bot) return;
+    // ★uib22 跨世界判定：本服同环境世界间传送不发 respawn（dimension 恒 overworld），用行为信号——
+    //   单帧位移>500格=跨世界/远tp → KNOWN/光柱全清；维度字段变化同样全清。主城光柱只可能存在于主城。
+    var pe2=bot.entity&&bot.entity.position;
+    if(pe2){ if(S._lp){ var mx=pe2.x-S._lp.x,my=pe2.y-S._lp.y,mz=pe2.z-S._lp.z; if(mx*mx+my*my+mz*mz>250000){ KNOWN={}; OFF={}; for(var bk in S.beams) dropBeam(bk); log('跨世界判定：大跨度传送 → 信标缓存全清'); } } S._lp={x:pe2.x,y:pe2.y,z:pe2.z}; }
+    var cd2=curDim(); if(S._ld&&cd2&&S._ld!==cd2){ KNOWN={}; OFF={}; for(var bk in S.beams) dropBeam(bk); log('维度变化 → 信标缓存全清'); } S._ld=cd2;
+    var now=Date.now(); if(!S.force && now-S.last<IDLE_MS) return; S.last=now; S.force=0;
+    if(now-LASTSCAN>SCAN_MS){ LASTSCAN=now; hookUpdates(); bgScan(); }
+    var seen={}, n=0, cd=curDim();
+    for(var key in KNOWN){
+      var pp=KNOWN[key]; seen[key]=1;
+      if(pp.dim&&cd&&pp.dim!==cd){ pp.lastWhy='他维度:'+cd; try{ if(S.beams&&S.beams[key]) dropBeam(key); }catch(e){} continue; }
+      // ★v24: 本服所有 NORMAL 世界客户端都报 overworld → dim 判定天然失效，改距离判定：>600 格不点亮+拆光柱
+      var __pe=bot.entity&&bot.entity.position;
+      if(__pe){ var __dx=pp.x-__pe.x,__dy=pp.y-__pe.y,__dz=pp.z-__pe.z,__d2=__dx*__dx+__dy*__dy+__dz*__dz;
+        if(__d2>360000){ pp.lastWhy='太远:'+Math.round(Math.sqrt(__d2)); try{ if(S.beams&&S.beams[key]) dropBeam(key); }catch(e){} continue; } }
+      var r=inspect(bot,pp.x,pp.y,pp.z);
+      pp.lastWhy=(r.lit===true)?'lit':(r.why||'挂起');
+      if(r.lit===null){ if(S.beams[key]) n++; continue; }
+      if(r.lit){
+        var cur=S.beams[key];
+        if(!cur){
+          OFF[key]=(OFF[key]||0)+1;
+          if(OFF[key]<2){ continue; }   // ★需连续 2 次确认无阻挡才重建，抗方块数据抖动
+          delete OFF[key];
+          S.beams[key]=makeBeam(pp.x,pp.y,pp.z,r.h); S.beams[key].h=r.h; S.beams[key].miss=0; S.beams[key].pend=0; S.beams[key].pendN=0;
+          log('光柱重建 @',key,'高度',r.h); n++; continue;
+        }
+        else{
+          cur.miss=0;
+          if(cur.h!==r.h){
+            // ★去抖：连续 3 次读到同一个新高度才重建，避免 y 轴方块数据反复导致光柱闪烁
+            if(cur.pend===r.h){ cur.pendN=(cur.pendN||0)+1; } else { cur.pend=r.h; cur.pendN=1; }
+            if(cur.pendN>=3&&!cur.forced){
+              dropBeam(key); S.beams[key]=makeBeam(pp.x,pp.y,pp.z,r.h);
+              S.beams[key].h=r.h; S.beams[key].miss=0; S.beams[key].pend=0; S.beams[key].pendN=0;
+              log('光柱高度更新 ->', r.h, '(去抖3次确认)');
+            }
+          } else { cur.pend=0; cur.pendN=0; }
+        }
+        n++;
+      } else {
+        // ★v21：一读到阻挡立刻熄灭（原版延迟仅 距离/10 tick，不能等 12 秒）；
+        // 并且不删 KNOWN —— 拆掉方块后还要能恢复
+        delete OFF[key];
+        if(S.beams[key]&&!S.beams[key].forced){ dropBeam(key); log('光柱熄灭 @',key,'←',(r.why||'被方块阻挡')); }
+      }
+    }
+    for(var k2 in S.beams){ if(!seen[k2]&&++S.beams[k2].miss>=5) dropBeam(k2); }
+    if(++S.tick%10===0){
+      var det=[]; for(var kk in KNOWN){ var q=KNOWN[kk]; det.push(kk+'['+(q.dim||'?')+' '+(q.lastWhy||'-')+']'); }
+      log('已点亮信标:',n,'| 光柱:',Object.keys(S.beams).length,
+          '| 已知信标:',Object.keys(KNOWN).length, det.join(' '),
+          '| scene children:',S.scene.children.length,
+          '| 区块:',(window.world&&window.world.sectionObjects?Object.keys(window.world.sectionObjects).length:'?'));
+    }
+  }
+
+  var iv=setInterval(function(){
+    if(S.scene&&window.world&&window.world.scene===S.scene){tick();return;}
+    if(S.scene&&window.world&&window.world.scene!==S.scene){S.scene=null;S.beams={};S.tex=null;S.tried=0;KNOWN={};S.hooked=0;LASTSCAN=0;}
+    var r=init();
+    if(r==='ok'){loadTex();tick();return;}
+    if(++S.tried%5===0)log('等待:',r,'(第'+S.tried+'次)');
+    if(S.tried%200===0)log('仍在等待:',r,'(第'+S.tried+'次)');
+  },1500);
+})();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    <meta name="darkreader-lock">
+    <script>
+      window.startLoad = Date.now()
+      // g663 fix: forbid change of string prototype
+      Object.defineProperty(String.prototype, 'format', {
+        writable: false,
+        configurable: false
+      });
+      Object.defineProperty(String.prototype, 'replaceAll', {
+        writable: false,
+        configurable: false
+      });
+    </script>
+    <script>
+      // AiAlec: 整页中/英切换
+      window.WB_LANG = 'zh';
+      try{ var __l=localStorage.getItem('wbLang'); if(__l==='en') window.WB_LANG='en'; }catch(e){}
+      // ---- AiAlec: 禁用 NC 调试控制台 / #dev ----
+      try{ if(location.hash && location.hash.indexOf('dev')>=0){ history.replaceState(null,'',location.pathname+location.search); } }catch(e){}
+      try{ window.__devDisableNextConsole = true; }catch(e){}
+      /* AiAlec 2026-09-14: 运行中若任何代码把地址改成 #dev（错误处理/触屏设备），立刻抹掉，
+         否则会去 CDN 拉调试控制台把封面按钮挡住（表现为白页/按钮消失，刷新才好） */
+      try{
+        if(!window.__devHashGuard){
+          window.__devHashGuard = 1;
+          window.addEventListener('hashchange', function(){
+            try{ if(location.hash && location.hash.indexOf('dev')>=0){ history.replaceState(null,'',location.pathname+location.search); } }catch(e){}
+          });
+        }
+      }catch(e){}
+
+    </script>
+    <script>
+      // NextConsole: mount on <html>, not <body> — body.rotated uses transform and breaks fixed UI.
+      (function () {
+        var root = document.createElement('div')
+        root.id = 'next-console-root'
+        document.documentElement.appendChild(root)
+      })()
+    </script>
+    <!-- // #region initial loader -->
+    <script async>
+      const loadingDiv = /* html */ `
+      <div class="initial-loader" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10001; transition: opacity 0.3s ease-in-out; opacity: 1;">
+        <div class="initial-loader-background" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-size: cover; background-position: center; z-index: -1; background-image: url('./loading-bg.jpg');"></div>
+        <div class="initial-loader-content" style="display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1;">
+          <div class="initial-loader-loading-title">Loading...</div>
+          <div class="initial-loader-loading-subtitle">A true Minecraft client in your browser!</div>
+        </div>
+        <div class="initial-loader-error" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; flex-direction: column; align-items: center; justify-content: center; z-index: 2;">
+          <h1 class="initial-loader-error-title">Failed to load</h1>
+          <p class="initial-loader-error-subtitle error-subtitle">Check your connection and refresh the page</p>
+          <p class="initial-loader-error-advanced advanced-info"></p>
+          <p class="initial-loader-ios-warning ios-warning">Only iOS 15+ is supported due to performance optimizations</p>
+        </div>
+      </div>
+`
+      const insertLoadingDiv = () => {
+          const loadingDivElem = document.createElement('div')
+          loadingDivElem.innerHTML = loadingDiv
+          const loader = loadingDivElem.querySelector('.initial-loader')
+          if (loader) {
+            loader.addEventListener('transitionend', (e) => {
+              if (e.target === loader && !loader.dataset.error) {
+                loader.remove()
+              }
+            })
+          }
+          if (!window.pageLoaded) {
+            document.documentElement.appendChild(loadingDivElem)
+          }
+
+          // iOS version detection
+          const getIOSVersion = () => {
+            const match = navigator.userAgent.match(/OS (\d+)_(\d+)_?(\d+)?/);
+            return match ? parseInt(match[1], 10) : null;
+          }
+
+          // load error handling
+          const onError = (errorOrMessage, log = false) => {
+            let message = errorOrMessage instanceof Error ? (errorOrMessage.stack ?? errorOrMessage.message) : errorOrMessage
+            if (log) console.log(message)
+            if (typeof message !== 'string') message = String(message)
+            const loader = document.querySelector('.initial-loader')
+            if (!loader || loader.dataset.error) return
+
+            const errorDiv = loader.querySelector('.initial-loader-error')
+            const contentDiv = loader.querySelector('.initial-loader-content')
+            if (contentDiv) contentDiv.style.display = 'none'
+            if (errorDiv) errorDiv.style.display = 'flex'
+            loader.dataset.error = '1'
+
+            const [errorMessage, ...errorStack] = message.split('\n')
+            const subtitle = errorDiv?.querySelector('.error-subtitle')
+            const advancedInfo = errorDiv?.querySelector('.advanced-info')
+            if (subtitle) subtitle.textContent = errorMessage || 'An unexpected error occurred'
+            if (advancedInfo) advancedInfo.textContent = errorStack.join('\n')
+
+            const iosVersion = getIOSVersion()
+            if (iosVersion !== null && iosVersion < 15) {
+              const iosWarning = errorDiv?.querySelector('.ios-warning')
+              if (iosWarning) iosWarning.style.display = 'block'
+            }
+
+            /* AiAlec: 已禁用 #dev 跳转 */
+            if (window.navigator.serviceWorker && loader.style.opacity !== '0') {
+              window.navigator.serviceWorker.getRegistrations().then(registrations => {
+                registrations.forEach(registration => registration.unregister())
+              })
+            }
+            window.lastError = errorOrMessage instanceof Error ? errorOrMessage : new Error(errorOrMessage)
+          }
+          window.addEventListener('unhandledrejection', (e) => onError(e.reason, true))
+          window.addEventListener('error', (e) => onError(e.error ?? e.message))
+        }
+        insertLoadingDiv()
+        document.addEventListener('DOMContentLoaded', () => {
+          // move loading div to the end of body
+          const loadingDivElem = document.querySelector('.initial-loader');
+          const newContainer = document.body; // replace with your new container
+          if (loadingDivElem) newContainer.appendChild(loadingDivElem);
+        })
+    </script>
+    <script type="module" async>
+      const parseLastErrorStack = () => {
+        if (window.location.hash === '#dev') {
+          // NextConsole: loaded once from src/loadDevConsole.ts (avoid double init with devReload)
+          Promise.all([import('https://cdn.skypack.dev/stacktrace-gps'), import('https://cdn.skypack.dev/error-stack-parser')]).then(async ([{ default: StackTraceGPS }, { default: ErrorStackParser }]) => {
+            if (!window.lastError) return
+
+            let stackFrames = [];
+            if (window.lastError instanceof Error) {
+              stackFrames = ErrorStackParser.parse(window.lastError);
+            }
+            console.log('stackFrames', stackFrames)
+            const gps = new StackTraceGPS()
+            const mappedFrames = await Promise.all(
+              stackFrames.map(frame => gps.pinpoint(frame))
+            );
+            console.log('mappedFrames', mappedFrames)
+
+            const stackTrace = mappedFrames
+              .map(frame => `at ${frame.functionName} (${frame.fileName}:${frame.lineNumber}:${frame.columnNumber})`)
+              .join('\n');
+            console.log('stackTrace', stackTrace)
+          })
+        }
+      }
+      parseLastErrorStack()
+      window.addEventListener('hashchange', (e) => {
+        setTimeout(() => {
+          parseLastErrorStack()
+        })
+      })
+    </script>
+    <style>
+      @font-face {
+        font-family: mojangles;
+        src: url('./mojangles.ttf');
+      }
+      html {
+        background: black;
+      }
+      .initial-loader {
+        --font-size: 20px;
+        overflow: hidden;
+      }
+      .initial-loader-background {
+        filter: brightness(0.5) blur(6px);
+        transform: scale(1.04);
+      }
+      .initial-loader-loading-title {
+        color: white;
+        font-family: mojangles, monospace;
+        font-weight: 500;
+        font-size: calc(var(--font-size) * 1.2);
+        text-align: center;
+        text-shadow: 2px 2px #000000;
+      }
+      .initial-loader-loading-subtitle {
+        color: rgb(176, 176, 176);
+        font-family: mojangles, monospace;
+        font-weight: 500;
+        font-size: var(--font-size);
+        margin-top: 8px;
+        text-align: center;
+        text-shadow: 2px 2px #000000;
+      }
+      .initial-loader-error-title {
+        color: #ff6b6b;
+        font-family: mojangles, monospace;
+        font-weight: 500;
+        font-size: 24px;
+        text-align: center;
+        text-shadow: 2px 2px #000000;
+        margin: 0 0 12px;
+      }
+      .initial-loader-error-subtitle {
+        color: white;
+        font-family: mojangles, monospace;
+        font-weight: 500;
+        font-size: 12px;
+        text-align: center;
+        text-shadow: 2px 2px #000000;
+        margin: 0;
+        max-width: min(560px, 90vw);
+        word-break: break-word;
+      }
+      .initial-loader-error-advanced {
+        color: #808080;
+        font-family: mojangles, monospace;
+        font-weight: 500;
+        font-size: 10px;
+        text-align: center;
+        margin: 14px 0 0;
+        max-width: min(560px, 90vw);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .initial-loader-ios-warning {
+        color: rgb(255, 100, 100);
+        font-family: mojangles, monospace;
+        font-size: calc(var(--font-size) * 0.6);
+        margin-top: 10px;
+        text-align: center;
+        display: none;
+      }
+      @media screen and (min-width: 550px) {
+        .initial-loader {
+          --font-size: 30px;
+        }
+      }
+      @media screen and (min-width: 950px) {
+        .initial-loader {
+          --font-size: 50px;
+        }
+      }
+    </style>
+    <!-- // #endregion -->
+    <!-- <script type="module">
+      window.loadPluginScript = async ({ pluginName, script }) => {
+        window.loadedPlugins[pluginName] = await import(script)
+      }
+    </script> -->
+    <title>Minecraft Web Client</title>
+    <!-- <link rel="canonical" href="https://mcraft.fun"> -->
+    <meta name="description" content="Minecraft Java Edition Client in Browser — Full Multiplayer Support, Server Connect, Offline Play — Join real Minecraft servers">
+    <meta name="keywords" content="Play, Minecraft, Online, Web, Java, Server, Single player, Javascript, PrismarineJS, Voxel, WebGL, Three.js">
+    <meta name="date" content="2024-07-11" scheme="YYYY-MM-DD">
+    <meta name="language" content="English">
+    <meta name="theme-color" content="#349474">
+    <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover'>
+    <meta property="og:title" content="Minecraft Web Client" />
+    <meta property="og:type" content="website" />
+    <meta name="format-detection" content="telephone=no">
+  <meta charset="UTF-8"><link href="./static/css/493.b1de6773.css" rel="stylesheet"><link href="./static/css/index.fa72615c.css" rel="stylesheet"><link rel="manifest" crossorigin="anonymous" href="manifest.json"><link rel="favicon" href="favicon.png"><link rel="icon" type="image/png" href="favicon.png"><meta property="og:image" content="favicon.png"><style>
+    /* AiAlec: 精简 mwc 产品宣传角标(水印/右下角说明/产品链接), 保留游戏核心UI */
+    .bottom-info-XUJ4_b, .bottomInfo { display: none !important; }
+    /* AiAlec 2026-10-22 (Alec 红线): 画面上不许有任何调试字样——bundle stats 角标(FPS/区块数等)全灭，数据改走 F12 控制台 */
+    .mc-renderer-debug-overlay, .lil-auto-place, [class*="renderer-debug"] { display: none !important; }
+    .product-description-mpFNW4, .product-link-iL2GHi,
+    .maps-provider-JGaNCh { display: none !important; }
+    /* 去除游戏加载 Loading 副标题(非必需信息) */
+    .initial-loader-loading-subtitle { display: none !important; }
+    /* 服务器行描述换行 + 自适应高度(Alec 卡片欢迎语不溢出); 图片高度保底防塌 */
+    .world_root-HUO6kD { height: auto !important; min-height: 40px; align-items: flex-start !important; }
+    .world_image-RCHVi3 { height: 40px !important; flex: 0 0 auto !important; }
+    .world_info-aesWwe { white-space: normal !important; }
+    .world_info_formatted-T9yz4t { white-space: pre-wrap !important; word-break: break-word !important; line-height: 1.25 !important; }
+  </style><!-- fwdiag --><script>
+/* AiAlec 烟花诊断探针 v1 (2026-09-15) — 只读，不改行为 */
+(function(){
+  var D = window.__fwDiag = {ver:'fw1', events:[], held:null, using:null, rmbDown:0, rmbUp:0};
+  function log(k,v){ try{ D.events.push([new Date().toISOString().slice(11,19), k, String(v).slice(0,60)]); if(D.events.length>120) D.events.shift(); }catch(e){} }
+
+  document.addEventListener('mousedown', function(e){
+    if(e.button===2){ D.rmbDown++; log('RMB-down', (e.target&&e.target.tagName)||'?'); }
+  }, true);
+  document.addEventListener('mouseup', function(e){
+    if(e.button===2){ D.rmbUp++; log('RMB-up',''); }
+  }, true);
+
+  var hooked=false;
+  setInterval(function(){
+    try{
+      var b=window.bot;
+      if(!b) return;
+      D.held = b.heldItem ? (b.heldItem.name+' x'+b.heldItem.count) : null;
+      D.using = b.usingItem ? 'using' : '-';
+      if(!hooked && typeof b.on === 'function'){
+        hooked = true;
+        ['startUsingItem','stopUsingItem','usedFirework','entityElytraFlew','entityElytraState'].forEach(function(ev){
+          try{ b.on(ev, function(a,c){ log(ev, (a&&a.name)||(c&&c.name)||''); }); }catch(e){}
+        });
+        log('hooked','ok');
+      }
+    }catch(e){}
+  }, 400);
+
+  console.log('[fwdiag] probe ready, right-click a few times then run __fwDiag');
+})();
+</script><!-- /fwdiag -->
+<!-- fwfix --><script>
+/* AiAlec 烟花右键增强 v4 (2026-09-15)
+   1) 右键烟花 → 手持物/手臂摆动
+   2) 确保服务器消耗一枚（原生没发才补）
+   3) 滑翔中 → 本地物理加速
+   4) 通知 fwrender 记录「用过烟花」→ 单人场景本地补视觉火箭
+   5) 落地兜底清滑翔状态
+   诊断：__fwFix / __fwFix.reset() */
+(function(){
+  var D = window.__fwFix = {ver:'v4', hooked:0, seen:0, fallback:0, boost:0, swing:0, pressed:0, grounded:0, lastUse:0, lastPress:0};
+
+  function hook(){
+    var b=window.bot;
+    if(!b||typeof b.on!=='function'||D.hooked) return;
+    D.hooked=1;
+    try{ b.on('startUsingItem',function(){ D.lastUse=Date.now(); D.seen++; }); }catch(e){}
+    try{ b.on('usedFirework',  function(){ D.lastUse=Date.now(); D.seen++; }); }catch(e){}
+  }
+  setInterval(hook, 700);
+
+  function swing(b){
+    try{ b.emit('botArmSwingStart','right'); }catch(e){}
+    try{ if(b.swingArm) b.swingArm('right'); }catch(e){}
+    D.swing++;
+    setTimeout(function(){ try{ b.emit('botArmSwingEnd','right'); }catch(e){} }, 250);
+  }
+
+  document.addEventListener('mousedown', function(e){
+    if(e.button!==2) return;
+    var b=window.bot; if(!b) return;
+    var now=Date.now();
+    if(now-D.lastPress<250) return;
+    hook();
+    var it=b.heldItem;
+    if(!it||it.name!=='firework_rocket') return;
+    D.lastPress=now; D.pressed++;
+    setTimeout(function(){
+      var native=(Date.now()-D.lastUse<300);
+      if(!native){ try{ b.activateItem(false); D.fallback++; }catch(err){} }
+      swing(b);
+      // ★告诉渲染层：刚用了烟花（单人场景它会本地补一个升空火箭）
+      try{ if(window.__fwRender&&window.__fwRender.onUsed) window.__fwRender.onUsed(); }catch(err){}
+      var gliding=!!(b.entity&&b.entity.fallFlying);
+      if(gliding&&typeof b.requestFireworkBoost==='function'){
+        var ok=false; try{ ok=b.requestFireworkBoost(); }catch(err){}
+        if(ok) D.boost++;
+        console.log('[fwfix] gliding -> boost '+(ok?'ok':'fail')+' | consumed='+(native?'native':'fallback'));
+      }else{
+        console.log('[fwfix] not gliding -> consume('+(native?'native':'fallback')+') + swing');
+      }
+    }, 180);
+  }, true);
+
+  setInterval(function(){
+    var b=window.bot, e=b&&b.entity;
+    if(!e) return;
+    try{
+      if(e.onGround&&(e.fallFlying||e.elytraFlying)){
+        e.fallFlying=false; e.elytraFlying=false; D.grounded++;
+        if(D.grounded<=3||D.grounded%20===0) console.log('[fwfix] landing fallback: gliding state cleared x'+D.grounded);
+      }
+    }catch(err){}
+  }, 150);
+
+  D.reset=function(){ var b=window.bot; if(b&&b.entity){ b.entity.fallFlying=false; b.entity.elytraFlying=false; } return 'ok'; };
+  console.log('[fwfix] v4 enabled (swing + consume + boost + local rocket report + landing fallback)');
+})();
+</script><!-- /fwfix -->
+<!-- q19 使用动画驱动 v5：原版优先级(主手食物>副手盾)+松手即停+协议级 down+平滑会话 -->
+<script>
+/* AiAlec 使用动画驱动 v5 (2026-10-24)
+   v4 三病因（Alec 10-24 反馈）：
+   ① 主手苹果+副手盾时被强切盾牌——副手兜底正则漏掉全部食物（apple 不在名单）⇒ 违反原版"主手优先"；
+   ② 松手后 ticks 按 3/50ms 衰减 ⇒ 动画还晃 0.5s；且吃完/被打断后握键不松会继续摆（服务端并没在吃）；
+   ③ 会话比对用了未 strip 名 ⇒ 每 tick 重置会话，ticks 永远=1（咀嚼计数/打嗝阈值全废）。
+   v5 修法：
+   - 副手盾兜底改为"主手无可交互物品才用副手"（Q.isUse），原版规则；
+   - down 以协议级 bot.usingHeldItem 为主 + 右键按下宽限窗(1.6s)兜底，跑动/切光标/单信号抖动都不丢；
+   - 使用态 true→false（吃完/被打断）立即收手并清宽限窗——握键不续餐（原版需重新按下）；
+   - 松手即停：mouseup 时若仍在进食态，直接补发 deactivateItem，保证服务端也真停；
+   - 界面开着(__webmcUIBlock)立即收手。
+   契约：__q13 = {active, useItem(=strip 名), useHand('main'|'off'), ticks(50ms/tick), holdFood} */
+(function () {
+  if (globalThis.__q13 && globalThis.__q13.__v5) return;
+  var DONE = {"bow":1,"crossbow":1,"trident":1,"fishing_rod":1,"spyglass":1,"ender_pearl":1,"potion":1,"splash_potion":1,"lingering_potion":1,"milk_bucket":1,"honey_bottle":1,"golden_apple":1,"enchanted_golden_apple":1,"shield":1,"apple":1,"bread":1,"cooked_beef":1,"cooked_porkchop":1,"cooked_chicken":1,"cooked_mutton":1,"golden_carrot":1,"dried_kelp":1,"beef":1,"porkchop":1,"chicken":1,"mutton":1,"rabbit":1,"cod":1,"salmon":1,"carrot":1,"potato":1,"baked_potato":1,"beetroot":1,"beetroot_soup":1,"mushroom_stew":1,"rabbit_stew":1,"suspicious_stew":1,"cookie":1,"melon_slice":1,"pumpkin_pie":1,"sweet_berries":1,"glow_berries":1,"tropical_fish":1,"pufferfish":1,"rotten_flesh":1,"spider_eye":1,"poisonous_potato":1,"chorus_fruit":1,"cake":1};
+  var Q = globalThis.__q13 = { __v5: true, active: 1, useItem: '', useHand: '', ticks: 0, dbg: 0,
+                               seen: 0, sessions: 0, lastMax: 0, holdFood: false,
+                               chewStart: 0, lastChew: 0, chewN: 0, burpN: 0, fbN: 0,
+                               pressUntil: 0, wasUsing: 0, userReleased: 0 };
+  Q.plain = function (n) { return !n ? n : String(n).replace(/^minecraft:/, ''); };
+  Q.isUse = function (n) { return !!DONE[Q.plain(n)]; };
+  /* bundle __qIsHand 用 —— 副手 HoldingBlock 也能拿到进食基础姿势 */
+  Q.isHand = function (h) { try { return !!h && (h.offHand ? 'off' : 'main') === (Q.useHand || 'main'); } catch (e) { return false; } };
+  /* 音效直放。优先走定位混音桥；桥失败时 HTML5 Audio 二维兜底，保证"一定有声" */
+  Q.snd = function (name, vol) {
+    var ok = false;
+    try { var SB = window.__soundBridge; if (SB && SB.playAt) ok = SB.playAt(name, null, vol, 0.85 + Math.random() * 0.3); } catch (e) {}
+    if (!ok) {
+      try {
+        var f = name === 'minecraft:entity.player.burp' ? 'random/burp' : 'random/eat' + (1 + Math.floor(Math.random() * 3));
+        var a = new Audio('/sounds/minecraft/sounds/' + f + '.mp3');
+        a.volume = Math.min(0.6, vol || 0.5);
+        a.playbackRate = 0.9 + Math.random() * 0.25;
+        var pr = a.play(); if (pr && pr.catch) pr.catch(function () {});
+        Q.fbN++;
+      } catch (e2) {}
+    }
+  };
+  Q.reset = function (burp) {
+    /* 打嗝仅"服务端确认吃完"时播——用户主动松手(原版未吃完)不打嗝，由 userReleased 区分 */
+    if (burp && !Q.userReleased && Q.chewStart && Date.now() - Q.chewStart > 500) { Q.snd('minecraft:entity.player.burp', 0.9); Q.burpN++; }
+    Q.userReleased = 0;
+    Q.chewStart = 0; Q.lastChew = 0; Q.active = 0; Q.useItem = ''; Q.useHand = ''; Q.ticks = 0;
+  };
+  /* v5: 右键按下宽限窗——覆盖 mousedown→activateItem 窗口期，以及 itemBeingUsed/buttons[2]
+     单信号抖动（跑动中切光标/实体准星接管时尤为关键）。松手/失焦即清空。 */
+  document.addEventListener('mousedown', function (e) {
+    if (e.button !== 2) return;
+    try { if (window.__webmcUIBlock) return; } catch (err) {}
+    Q.pressUntil = Date.now() + 2600;   // v6: 1600 恰好=苹果时长，吃完边界偶发断档 -> 2600 留网络余量
+  }, true);
+  document.addEventListener('mouseup', function (e) {
+    if (e.button !== 2) return;
+    Q.pressUntil = 0; Q.userReleased = 1;
+    /* 松手即停：若此刻仍在进食态，直接补发 release。
+       MouseManager 路径没跑时（itemBeingUsed=null）其 mouseup 不会调 deactivateItem，
+       服务端会继续吃——这就是"右键都松开了还在晃/还在吃"的根因之一。 */
+    try {
+      if (Q.active && Q.ticks > 0) { var b = globalThis.bot; if (b && b.usingHeldItem) b.deactivateItem(); }
+    } catch (err) {}
+  }, true);
+  window.addEventListener('blur', function () { Q.pressUntil = 0; });
+
+  Q.tick = function () {
+    try {
+      var bot = globalThis.bot;
+      if (!bot) { Q.reset(false); return; }
+      if (window.__webmcUIBlock) { Q.reset(false); return; }   // 界面开着：立即收手（与 q21 一致）
+      var M = null; try { M = bot.mouse; } catch (e) {}
+      var iu = M && M.itemBeingUsed, off = !!(iu && iu.isOffhand);
+      var hi = bot.heldItem, hn = hi && hi.name, oi = null;
+      try { oi = bot.inventory && bot.inventory.slots && bot.inventory.slots[45]; } catch (e) {}
+      var on = oi && oi.name, it = off ? on : hn;
+      /* v5 down：协议级使用态为主（服务端真在吃才动），按下宽限窗兜底 */
+      var using = false;
+      try { using = !!bot.usingHeldItem; } catch (e) {}
+      if (Q.wasUsing && !using) {
+        /* 使用态消失（吃完/服务端打断）：立即收手并清宽限窗——握键不续餐（原版需重新按下）。
+           ★必须先清 wasUsing 再 return，否则 latch 卡在 1 令之后每个 tick 都走此分支（状态机永久短路） */
+        Q.pressUntil = 0; Q.wasUsing = 0;
+        Q.reset(true);
+        return;
+      }
+      Q.wasUsing = using ? 1 : 0;
+      var down = using || (Q.pressUntil && Date.now() < Q.pressUntil);
+      if (!down) { try { if (M && M.buttons && M.buttons[2]) down = 1; } catch (e) {} }
+      Q.holdFood = !!(hn && Q.isUse(hn) && !down);
+      if (!down) { Q.reset(true); return; }
+      /* 副手盾：主手无可交互物品时才驱动副手举盾。
+         ★v5: v4 正则漏掉全部食物 ⇒ 主手苹果+副手盾被强切盾牌（Alec: "盾牌触发，苹果不触发"） */
+      /* ★注意 on/it 都带 minecraft: 前缀，必须 plain 后比对（v4 直接 === 'shield' 永不成立，
+         副手盾兜底实际从未生效——有方块在准星时盾举不起来） */
+      if (off === false && Q.plain(it) !== 'shield') {
+        if (Q.plain(on) === 'shield' && !Q.isUse(Q.plain(it))) { it = 'shield'; off = true; }
+      }
+      if (!it || !Q.isUse(it)) {
+        /* 手持物变了（切换物品栏/吃完）⇒ 取消服务端使用态，避免下次 use_item 被
+           "already using" 吞掉（Alec: 时好时坏触发不了） */
+        if (Q.active && Q.ticks > 0) { try { if (bot.usingHeldItem) bot.deactivateItem(); } catch (e) {} }
+        Q.reset(true);
+        return;
+      }
+      /* ★v5: 会话比对用 strip 名（v4 与未 strip 的 it 比对 ⇒ 每 tick 重置，ticks 永远=1） */
+      if (!Q.active || Q.useItem !== Q.plain(it)) {
+        Q.active = 1; Q.useHand = off ? 'off' : 'main'; Q.ticks = 0; Q.sessions++;
+        Q.chewStart = Date.now(); Q.lastChew = 0;
+      }
+      Q.useHand = off ? 'off' : 'main';
+      /* useItem 存 strip 后名字——bundle render 分支 __mine(strip)===__u.useItem 才成立 */
+      Q.useItem = Q.plain(it);
+      Q.ticks += 1;
+      if (Q.ticks > Q.lastMax) Q.lastMax = Q.ticks;
+      Q.seen++;
+      var nowMs = Date.now();
+      if (/apple|bread|beef|porkchop|chicken|mutton|rabbit|cod|salmon|carrot|potato|beetroot|soup|stew|berries|pie|cookie|melon|fish|kelp|flesh|chorus|honey|potion|milk/.test(Q.plain(it))) {
+        if (!Q.chewStart) Q.chewStart = nowMs;
+        if (nowMs - (Q.lastChew || 0) >= 200) {           // 原版 4gt 一声——咀嚼声客户端本地播（服务端排除吃者自身）
+          Q.lastChew = nowMs; Q.chewN++;
+          Q.snd('minecraft:entity.generic.eat', 0.45 + Math.random() * 0.35);
+        }
+      }
+    } catch (e) { Q.reset(false); }
+  };
+  /* ★uib60: bundle render 每帧调 bare __qIsHand，但 bundle 内定义它的 IIFE 未执行
+     （webpack 模块未被 require）→ ReferenceError 整帧崩 → 副手/主手姿势全丢。
+     此处按 bundle 原语义补齐（u=__q13 对象, h=HoldingBlock 实例）。 */
+  if (typeof globalThis.__qIsHand !== 'function') {
+    globalThis.__qIsHand = function (u, h) {
+      try { return !!(u && u.isHand && u.isHand(h)); } catch (e) { return false; }
+    };
+  }
+  setInterval(Q.tick, 50);
+  console.log('[useanim] v5 enabled (vanilla-priority+immediate-stop+protocol-down) chew=' + Q.chewN + ' burp=' + Q.burpN + ' fb=' + Q.fbN);
+})();
+</script>
+<script>
+/* q-itemfix v1（2026-10-25）：清 MouseManager.itemBeingUsed 残留
+   病根（Alec: 苹果时好时坏吃不了）：bundle startUsingItem() 首行
+   if(this.itemBeingUsed||...)return —— itemBeingUsed 只在松手(buttons[2]=false)时清。
+   吃完不松手直接再按 → activateItem 被吞 → 服务端不开吃。
+   原版按住右键可连吃：此处检测服务端使用态结束(usingHeldItem=false 持续 300ms)即清残留，
+   不碰 bundle 其他逻辑；误清防护=300ms 防抖 + 仅清 itemBeingUsed 单字段。 */
+(function () {
+  if (globalThis.__itemFix) return;
+  var S = globalThis.__itemFix = { cleared: 0, err: 0 };
+  var n = 0;
+  setInterval(function () {
+    try {
+      var b = globalThis.bot; if (!b) { n = 0; return; }
+      var M = b.mouse; if (!M || !M.itemBeingUsed) { n = 0; return; }
+      var using = false; try { using = !!b.usingHeldItem; } catch (e) {}
+      if (using) { n = 0; return; }
+      if (++n >= 3) { M.itemBeingUsed = null; S.cleared++; n = 0; }
+    } catch (e) { S.err++; n = 0; }
+  }, 100);
+  console.log('[itemfix] v1 enabled (clear itemBeingUsed residue after use ends)');
+})();
+</script>
+
+
+<!-- q-eatanim v2 --><script>
+/* 原版风格进食动画 v2 (2026-10-24)
+   v1 病因（Alec: "苹果老在抽搐，来回动来回动，你就慢慢动就行了"）：
+   在咬合波上叠了 41Hz 高频微颤(wob) + 23Hz 方波方向翻转(dir) —— 两个高频分量
+   互相叠乘出混沌抖动，且方波方向翻转是阶跃=顿挫感来源。
+   v2：只保留原版 4gt(0.2s) 平滑咬合波（正弦整流，无阶跃无高频），
+   外加一个 ~0.25Hz 极慢呼吸摆；咬合幅度略收（原版观感应"慢而稳"）。
+   实现：不动 bundle。在 HoldingBlock.armTransformGroup 与 cameraGroup 之间插 wrapper group，
+   rAF 每帧对 wrapper 施加"举到嘴边 + 平滑咬合脉冲"；不吃时归零。 */
+(function () {
+  if (globalThis.__eatAnim && globalThis.__eatAnim.v >= 2) return;
+  var A = globalThis.__eatAnim = { v: 2, frames: 0, applied: 0, err: 0, wrapped: 0 };
+  function ensureWrap(hb) {
+    try {
+      if (!hb || !hb.armTransformGroup) return null;
+      var atg = hb.armTransformGroup;
+      if (atg.__eatWrap) return atg.__eatWrap;
+      var P = atg.parent; if (!P) return null;
+      var g = new (atg.constructor)();     // 与 atg 同类(THREE.Group)，无参可构造
+      g.matrixAutoUpdate = true;
+      P.add(g); g.add(atg);                // 夹进层级：cameraGroup -> g -> armTransformGroup
+      atg.__eatWrap = g; A.wrapped++;
+      return g;
+    } catch (e) { A.err++; return null; }
+  }
+  function zero(g) { g.position.set(0, 0, 0); g.rotation.set(0, 0, 0); }
+  function frame() {
+    requestAnimationFrame(frame);
+    try {
+      var w = globalThis.world; if (!w) return;
+      var q = globalThis.__q13; if (!q) return;
+      A.frames++;
+      var eating = !!(q.active && q.ticks > 0 && q.useItem && q.useHand);
+      var food = eating && /apple|bread|porkchop|beef|chicken|mutton|rabbit|cod|salmon|carrot|potato|beetroot|soup|stew|berries|pie|cookie|melon|fish|kelp|flesh|chorus|honey_bottle|milk_bucket|potion|golden_apple|enchanted_golden_apple|rotten_flesh|spider_eye|poisonous_potato|pufferfish|tropical_fish/.test(q.useItem);
+      var t = performance.now() / 1000;
+      var ph = t * Math.PI * 10;                    // 0.2s 周期 = 原版 4gt 一咬
+      var bite = Math.max(0, Math.sin(ph));         // 平滑咬合波 0→1→0（正弦整流，无阶跃）
+      var sway = Math.sin(t * 1.6) * 0.012;         // ~0.25Hz 极慢呼吸摆（去抽搐）
+      var gMain = w.holdingBlock ? ensureWrap(w.holdingBlock) : null;
+      var gOff = w.holdingBlockLeft ? ensureWrap(w.holdingBlockLeft) : null;
+      if (gMain) {
+        if (food && q.useHand === 'main') {
+          gMain.position.set(0.05, 0.20 + 0.05 * bite, 0.14 + 0.04 * bite);
+          gMain.rotation.set(-0.35 - 0.22 * bite + sway, 0.10 + sway * 0.6, 0.03 * Math.sin(ph + 1.2));
+          A.applied++;
+        } else zero(gMain);
+      }
+      if (gOff) {
+        if (food && q.useHand === 'off') {
+          gOff.position.set(-0.05, 0.20 + 0.05 * bite, 0.14 + 0.04 * bite);
+          gOff.rotation.set(-0.35 - 0.22 * bite + sway, -0.10 - sway * 0.6, -0.03 * Math.sin(ph + 1.2));
+          A.applied++;
+        } else zero(gOff);
+      }
+    } catch (e) { A.err++; }
+  }
+  requestAnimationFrame(frame);
+  console.log('[eatanim] v2 enabled (smooth 4gt bite, no jitter)');
+})();
+</script>
+
+
+<!-- q-offhand-sync v1 --><script>
+/* 副手显示兜底 v1 (2026-10-22)
+   病根：window_items/set_slot 的 updateSlot(45) 事件若早于 alec2 监听器安装（或整局不发），
+   reactive.heldItemOff 永远空 → 副手 3D 不渲染。这里轮询比对 slot45 变化，
+   变化即直调 window.playerState.updateHeldItem(true)（alec2 官方通道），不碰 bundle。 */
+(function () {
+  if (globalThis.__offSync) return;
+  var S = globalThis.__offSync = { v: 1, last: '?init', push: 0, miss: 0, same: 0 };
+  function key45() {
+    var b = globalThis.bot;
+    var o = b && b.inventory && b.inventory.slots && b.inventory.slots[45];
+    return o ? (o.name + 'x' + o.count + ':' + (o.metadata || '')) : '';
+  }
+  function sync(force) {
+    try {
+      var ps = window.playerState;
+      if (!ps || typeof ps.updateHeldItem !== 'function') return;
+      var k = key45();
+      if (!force && k === S.last) { S.same++; return; }
+      S.last = k; ps.updateHeldItem(true); S.push++;
+    } catch (e) { S.miss++; }
+  }
+  S.sync = sync;
+  setInterval(function () { sync(false); }, 1000);
+  var n = 0;                                    // bot 就绪后立即强推一次（补错过的初始 window_items）
+  var iv = setInterval(function () {
+    if (++n > 120) { clearInterval(iv); return; }
+    if (globalThis.bot && globalThis.bot.inventory) { sync(true); clearInterval(iv); }
+  }, 1000);
+  console.log('[offsync] v1 enabled');
+})();
+</script>
+
+
+<!-- q-cleanui v1 --><script>
+/* 页面净化 v1 (2026-10-22, Alec 红线：页面不许有任何调试字样)
+   ① bundle stats 调试角标(FPS/区块统计等 .mc-renderer-debug-overlay) CSS 全灭 + JS 移除兜底
+   ② 聊天里的服务器调试行([BEAM]信标扫描/§8[W]世界名/[AlecTools]诊断)不再上聊天屏——
+      过滤器先按原逻辑喂给 __qWorld/__srvBeaconsNW 消费端，再 console.log 并吞掉
+   ③ autoLowerRenderDistance=true：帧渲染>25ms 时自动降有效渲染距离(80%步进)，卡顿保帧率，
+      FPS 回稳不再回弹抖动(bundle 原生 ChunkMeshManager.checkPerformance) */
+(function () {
+  if (globalThis.__cleanUi) return;
+  var C = globalThis.__cleanUi = { v: 1, killed: 0, caught: 0, last: '', aldOn: 0, aldTry: 0 };
+
+  /* ① 角标兜底移除（防换类名/后挂） */
+  setInterval(function () {
+    try {
+      var els = document.querySelectorAll('.mc-renderer-debug-overlay,.lil-auto-place');
+      if (els.length) { for (var i = 0; i < els.length; i++) els[i].remove(); C.killed += els.length; }
+    } catch (e) {}
+  }, 1000);
+
+  /* ② 聊天调试行过滤：bot.emit 包装（bot 一出现即装，早于聊天 UI 消费） */
+  function parseDbg(plain) {
+    try {
+      var m1 = plain.match(/\[W\](\S+)/); if (m1) window.__qWorld = m1[1];      // SkyIsland 世界名（qworld 同源逻辑）
+      var m2 = plain.match(/\[BEAM\](-?\d+),(-?\d+),(-?\d+),([^,\s]+),(-?\d+)/);
+      if (m2) {
+        var bk = m2[1] + ',' + m2[2] + ',' + m2[3] + ',' + m2[4];
+        var nk = m2[1] + ',' + m2[2] + ',' + m2[3];
+        var lv = parseInt(m2[5], 10);
+        window.__srvBeacons = window.__srvBeacons || {}; window.__srvBeaconsNW = window.__srvBeaconsNW || {};
+        if (lv > 0) { window.__srvBeacons[bk] = lv; window.__srvBeaconsNW[nk] = lv; }
+        else { delete window.__srvBeacons[bk]; delete window.__srvBeaconsNW[nk]; }
+        try { if (window.__beam) window.__beam.force = 1; } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  var n = 0;
+  var iv = setInterval(function () {
+    if (++n > 600) { clearInterval(iv); return; }
+    var b = globalThis.bot;
+    if (!b || b.__dbgMsgFilter) return;
+    clearInterval(iv);
+    try {
+      var oe = b.emit.bind(b);
+      b.emit = function (ev) {
+        if (ev === 'message' || ev === 'messagestr') {
+          var a0 = arguments[1], s = '';
+          try { s = (typeof a0 === 'string') ? a0 : String(a0); } catch (e) { s = ''; }
+          var plain = s.replace(/\u00a7./g, '');
+          if (/^\[BEAM\]/.test(plain) || /^\[W\]\S/.test(plain) || /^\[AlecTools\]/.test(plain)) {
+            parseDbg(plain);
+            C.caught++; C.last = plain.slice(0, 120);
+            try { console.log('[chat-dbg]', plain.slice(0, 200)); } catch (e) {}
+            return true;
+          }
+        }
+        return oe.apply(b, arguments);
+      };
+      b.__dbgMsgFilter = 1;
+      console.log('[cleanui] chat debug filter armed');
+    } catch (e) { console.log('[cleanui] filter ERR', e && e.message); }
+  }, 100);
+
+  /* ③ autoLowerRenderDistance 外部开启（appViewer.inWorldRenderingConfig 与 bundle 同引用，alec2 音量同法已验证） */
+  var n2 = 0;
+  var iv2 = setInterval(function () {
+    if (++n2 > 240) { clearInterval(iv2); return; }
+    try {
+      var av = window.appViewer;
+      if (av && av.inWorldRenderingConfig) {
+        clearInterval(iv2);
+        if (av.inWorldRenderingConfig.autoLowerRenderDistance !== true) {
+          av.inWorldRenderingConfig.autoLowerRenderDistance = true;
+          C.aldOn = 1;
+          console.log('[cleanui] autoLowerRenderDistance=ON (帧渲染>25ms 自动降有效渲染距离)');
+        }
+      }
+    } catch (e) {}
+  }, 500);
+
+  /* FPS/渲染耗时 → 控制台（10s 一条，替代被下架的画面角标） */
+  var fc = 0, ft = performance.now();
+  (function fcount() {
+    fc++;
+    var now = performance.now();
+    if (now - ft >= 10000) {
+      try { console.log('[stats] client fps=' + (fc * 1000 / (now - ft)).toFixed(0) + ' overlayKilled=' + C.killed + ' chatDbgCaught=' + C.caught); } catch (e) {}
+      fc = 0; ft = now;
+    }
+    requestAnimationFrame(fcount);
+  })();
+
+  console.log('[cleanui] v1 enabled (overlay-off + chat-dbg-filter + autoLowerRD)');
+})();
+</script>
+
+
+
+<!-- fwrender --><script>
+/* AiAlec 烟花实体渲染 v7 (2026-09-16)
+   v4 原版 atlas 贴图 · v5 裁 canvas（修头朝下）+ 尺寸 0.85 · v6 单人本地视觉火箭
+   ★v7 新增原版「尾迹 + 爆炸」：
+     - 尾迹：火箭存活期间每 ~70ms 掉一颗小火花（原版一定有）
+     - 爆炸：火箭结束时炸一圈粒子。★原版只有「用烟花之星做过」的火箭才会炸出彩色烟花，
+             只用纸+火药的火箭不炸（只有尾迹）→ 这里按物品 NBT 的 Fireworks.Explosions 判断；
+             读不到 NBT 时默认炸（记录在 __fwRender.hasExpl）
+     - 颜色取自 NBT 的 Explosions[].Colors（打包 int → #RRGGBB）
+   贴图：itemsAtlasJson.textures['firework_rocket'] = {u:0.015625, v:0.3125, tileIndex:1281} */
+(function(){
+  var F = window.__fwRender = {ver:'v7', spawned:0, active:0, removed:0, seen:[], tex:null, size:0.85,
+                               localMade:0, parts:0, bursts:0, hasExpl:null, colors:null, burstOn:true};
+  var tracked = {}, locals = [], parts = [], tex=null, dotTex=null;
+  var pendingAt=0, pendingPos=null, pendingDir=null, pendingExpl=null, pendingColors=null, pendingFlight=1;
+  var lastTrail = {};
+  var T=null, scene=null, so=null;
+  var MAX_PARTS = 420;
+
+  function refs(){
+    if(T && scene) return true;
+    if(!window.THREE || !window.world || !window.world.scene) return false;
+    T = window.THREE; scene = window.world.scene; so = window.world.sceneOrigin;
+    return true;
+  }
+
+  /* ---------- 贴图 ---------- */
+  function canvasFallback(){
+    var c=document.createElement('canvas'); c.width=16; c.height=16;
+    var g=c.getContext('2d');
+    function px(x,y,w,hh,col){ g.fillStyle=col; g.fillRect(x,y,w,hh); }
+    px(2,10,1,4,'#6b4a2a'); px(3,9,1,4,'#6b4a2a'); px(4,8,1,3,'#8a6238');
+    px(5,7,2,2,'#e6e6e6');  px(7,5,2,3,'#f2f2f2'); px(9,3,2,3,'#ececec');
+    px(4,8,1,2,'#c9c9c9');  px(8,4,3,1,'#d0d0d0');
+    px(9,2,2,2,'#d8443a');  px(8,3,1,1,'#d8443a'); px(10,3,2,1,'#e05548');
+    var t=new T.CanvasTexture(c);
+    t.magFilter=T.NearestFilter; t.minFilter=T.NearestFilter; t.generateMipmaps=false;
+    try{ t.colorSpace=T.SRGBColorSpace; }catch(e){}
+    t.needsUpdate=true; F.tex='canvas-fallback'; return t;
+  }
+  function makeTex(){
+    if(tex || !T) return;
+    try{
+      var av=window.appViewer;
+      var cr=av&&av.resourcesManager&&av.resourcesManager.currentResources;
+      var j=cr&&cr.itemsAtlasJson, im=cr&&cr.itemsAtlasImage;
+      var info=j&&j.textures&&j.textures['firework_rocket'];
+      if(info&&im&&im.width){
+        var size=j.tileSize||16, W=j.width||1024, H=j.height||1024;
+        var sx=Math.round(info.u*W), sy=Math.round(info.v*H);
+        var c=document.createElement('canvas'); c.width=size; c.height=size;
+        var g=c.getContext('2d'); g.imageSmoothingEnabled=false;
+        g.drawImage(im, sx, sy, size, size, 0, 0, size, size);
+        var t=new T.CanvasTexture(c);
+        t.magFilter=T.NearestFilter; t.minFilter=T.NearestFilter; t.generateMipmaps=false;
+        try{ t.colorSpace=T.SRGBColorSpace; }catch(e){}
+        t.needsUpdate=true;
+        tex=t; F.tex='atlas-crop '+size+'px@('+sx+','+sy+') tile='+(info.tileIndex||'?');
+        console.log('[fwrender] vanilla texture cropped: '+F.tex);
+        return;
+      }
+    }catch(e){ console.log('[fwrender] atlas extract error: '+e.message); }
+    tex=canvasFallback();
+  }
+  /* 粒子用的小圆点（径向渐变，8x8） */
+  function makeDot(){
+    if(dotTex || !T) return;
+    var c=document.createElement('canvas'); c.width=8; c.height=8;
+    var g=c.getContext('2d');
+    var gr=g.createRadialGradient(4,4,0,4,4,4);
+    gr.addColorStop(0,'rgba(255,255,255,1)');
+    gr.addColorStop(0.45,'rgba(255,255,255,0.85)');
+    gr.addColorStop(1,'rgba(255,255,255,0)');
+    g.fillStyle=gr; g.fillRect(0,0,8,8);
+    dotTex=new T.CanvasTexture(c);
+    dotTex.magFilter=T.LinearFilter; dotTex.minFilter=T.LinearFilter; dotTex.generateMipmaps=false;
+    dotTex.needsUpdate=true;
+  }
+
+  /* ---------- 火箭网格 ---------- */
+  function makeMesh(){
+    var g=new T.Group();
+    var mat=new T.MeshBasicMaterial({ map:tex, transparent:true, alphaTest:0.5, depthWrite:false,
+      side:T.DoubleSide, toneMapped:false, fog:false });
+    var geo=new T.PlaneGeometry(F.size, F.size);
+    var p1=new T.Mesh(geo,mat); p1.frustumCulled=false;
+    var p2=new T.Mesh(geo,mat); p2.rotation.y=Math.PI/2; p2.frustumCulled=false;
+    g.add(p1); g.add(p2);
+    try{ if(so&&so.track) so.track(g); }catch(e){}
+    return g;
+  }
+  function kill(g){
+    try{ scene.remove(g); }catch(e){}
+    try{ for(var i=0;i<g.children.length;i++){ var c=g.children[i];
+      if(c.geometry&&c.geometry.dispose) c.geometry.dispose();
+      if(c.material&&c.material.dispose) c.material.dispose(); } }catch(e){}
+  }
+  function isFw(e){ return /firework/i.test(String((e&&(e.name||e.entityType||e.displayName))||'')); }
+  function anyRealFirework(){
+    var b=window.bot; if(!b||!b.entities) return false;
+    for(var id in b.entities){ if(isFw(b.entities[id])) return true; }
+    return false;
+  }
+
+  /* ---------- 粒子 ---------- */
+  function addPart(x,y,z,vx,vy,vz,life,size,color,fade){
+    if(!dotTex||parts.length>=MAX_PARTS) return;
+    var m=new T.Mesh(new T.PlaneGeometry(size,size), new T.MeshBasicMaterial({
+      map:dotTex, color:color, transparent:true, opacity:1, depthWrite:false,
+      blending:T.AdditiveBlending, toneMapped:false, fog:false }));
+    m.frustumCulled=false;
+    m.position.set(x,y,z);
+    try{ if(so&&so.track) so.track(m); }catch(e){}
+    try{ scene.add(m); }catch(e){ return; }
+    parts.push({g:m, born:Date.now(), life:life, vx:vx, vy:vy, vz:vz, fade:fade||1});
+  }
+  function spawnTrail(x,y,z){
+    addPart(x+(Math.random()-.5)*.18, y+(Math.random()-.5)*.18, z+(Math.random()-.5)*.18,
+            0, 0.008, 0, 420, 0.16, 0xfff0a0, 1);
+  }
+  function intToHex(n){
+    n = n>>>0; return ((n>>16)&255)<<16 | ((n>>8)&255)<<8 | (n&255);
+  }
+  function spawnBurst(x,y,z,colors){
+    var cols = (colors && colors.length) ? colors : [0xffd76a];
+    var N = 26;
+    for(var i=0;i<N;i++){
+      // 球面均匀方向
+      var th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1);
+      var sp=0.22+Math.random()*0.16;
+      var vx=Math.sin(ph)*Math.cos(th)*sp, vy=Math.cos(ph)*sp, vz=Math.sin(ph)*Math.sin(th)*sp;
+      addPart(x,y,z, vx,vy,vz, 780+Math.random()*360, 0.22, cols[i%cols.length], 1);
+    }
+    F.bursts++;
+    console.log('[fwrender] firework explosion @ '+x.toFixed(1)+','+y.toFixed(1)+','+z.toFixed(1)+
+                ' | 颜色数 '+cols.length+' | 粒子 '+N);
+  }
+
+  /* ---------- 读物品 NBT（判断有没有烟花之星 + 取颜色） ---------- */
+  function readFwNbt(item){
+    try{
+      if(!item||!item.nbt) return {known:false};
+      var v=item.nbt.value||item.nbt;
+      var fw=v.Fireworks && v.Fireworks.value ? v.Fireworks.value : v.Fireworks;
+      if(!fw) return {known:false};
+      var flight = fw.Flight && fw.Flight.value!=null ? fw.Flight.value : 1;
+      var exps = fw.Explosions && fw.Explosions.value ? fw.Explosions.value : fw.Explosions;
+      var list = exps && exps.value ? exps.value : exps;   // 可能是 list 包装
+      var has = false, colors = [];
+      if(list && list.length){
+        has = true;
+        for(var i=0;i<list.length;i++){
+          var e = list[i].value ? list[i].value : list[i];
+          var cs = e.Colors && (e.Colors.value!=null?e.Colors.value:e.Colors);
+          if(cs && cs.length){ for(var k=0;k<cs.length;k++){ colors.push(intToHex(cs[k])); } }
+        }
+      }
+      return {known:true, has:has, colors:colors, flight:Number(flight)||1};
+    }catch(e){ return {known:false, err:String(e.message||e)}; }
+  }
+
+  /* ---------- 右键用烟花时由 fwfix 调用 ---------- */
+  F.onUsed = function(){
+    var b=window.bot;
+    if(!b||!b.entity||!b.entity.position) return;
+    pendingAt=Date.now();
+    pendingPos={x:b.entity.position.x, y:b.entity.position.y+1.0, z:b.entity.position.z};
+    var ld=null;
+    try{ if(b.entity.yaw!=null){
+      var yaw=b.entity.yaw, pitch=(b.entity.pitch||0);
+      ld={x:-Math.sin(yaw)*Math.cos(pitch), y:-Math.sin(pitch), z:-Math.cos(yaw)*Math.cos(pitch)};
+    }}catch(e){}
+    if(!ld) ld={x:0,y:1,z:0};
+    pendingDir=ld;
+    var nbt = readFwNbt(b.heldItem);
+    F.hasExpl = nbt.known ? nbt.has : null;
+    F.colors = nbt.colors && nbt.colors.length ? nbt.colors : null;
+    pendingExpl = nbt.known ? nbt.has : null;
+    pendingColors = nbt.colors && nbt.colors.length ? nbt.colors : null;
+    pendingFlight = nbt.flight || 1;
+  };
+
+  function spawnLocal(){
+    if(!tex||!pendingPos||!pendingDir) return;
+    var g=makeMesh();
+    g.position.set(pendingPos.x,pendingPos.y,pendingPos.z);
+    try{ scene.add(g); }catch(e){ return; }
+    // 存活按物品 Flight 估算（原版 1→约1.5s，3→约2.5s）
+    var life = 1.2 + 0.45*(Number(pendingFlight)||1);
+    locals.push({g:g, dir:pendingDir, spd:1.15, born:Date.now(), life:life*1000});
+    F.localMade++; F.spawned++;
+    console.log('[fwrender] local visual rocket spawned (no server entity) | ttl '+life.toFixed(2)+'s | has star='+
+                (pendingExpl===null?'未知(默认炸)':pendingExpl));
+  }
+
+  /* ---------- 主循环 ---------- */
+  function sync(){
+    var b=window.bot;
+    if(!b||!b.entities||!refs()) return;
+    if(!tex) makeTex();
+    if(!dotTex) makeDot();
+    if(!tex) return;
+
+    /* 真实体（联机） */
+    for(var id in b.entities){
+      var e=b.entities[id];
+      if(!e) continue;
+      var nm=String((e.name||e.entityType||'')+' '+(e.displayName||''));
+      if(nm.trim()&&F.seen.indexOf(nm)<0&&F.seen.length<25) F.seen.push(nm);
+      if(!isFw(e)) continue;
+      if(!tracked[id]){
+        var g=makeMesh();
+        if(e.position) g.position.set(e.position.x,e.position.y,e.position.z);
+        try{ scene.add(g); }catch(err){}
+        tracked[id]=g; F.spawned++;
+        console.log('[fwrender] firework entity id='+id+' | '+F.tex);
+      }
+      // 尾迹
+      var now=Date.now();
+      if(!lastTrail[id] || now-lastTrail[id]>70){ lastTrail[id]=now; if(e.position) spawnTrail(e.position.x,e.position.y,e.position.z); }
+      if(e.position) tracked[id].userData = {x:e.position.x,y:e.position.y,z:e.position.z};
+    }
+    var act=0;
+    for(var id2 in tracked){
+      var e2=b.entities[id2], g2=tracked[id2];
+      if(!g2) continue;
+      if(!e2){
+        // ★实体消失 = 飞行结束 → 按 NBT 决定要不要炸
+        var p=g2.userData;
+        if(F.burstOn && p && pendingExpl!==false) spawnBurst(p.x,p.y,p.z, pendingColors);
+        kill(g2); delete tracked[id2]; delete lastTrail[id2]; F.removed++;
+        continue;
+      }
+      act++;
+      if(e2.position) g2.position.set(e2.position.x,e2.position.y,e2.position.z);
+    }
+
+    /* 本地视觉火箭 */
+    if(pendingAt && Date.now()-pendingAt>400){
+      if(!anyRealFirework()) spawnLocal();
+      pendingAt=0;
+    }
+    if(locals.length && anyRealFirework()){
+      for(var i=0;i<locals.length;i++){ kill(locals[i].g); F.removed++; }
+      locals.length=0;
+      console.log('[fwrender] real firework entity arrived, local fake handed over');
+    }
+    for(var j=locals.length-1;j>=0;j--){
+      var L=locals[j], age=Date.now()-L.born;
+      if(age>L.life){
+        // ★飞行结束 → 按原版规则：有烟花之星才炸
+        var pp=L.g.position, life0=(pendingExpl!==false);
+        if(F.burstOn && life0) spawnBurst(pp.x,pp.y,pp.z, pendingColors);
+        else console.log('[fwrender] rocket done: no firework star (vanilla: no explosion, trail only)');
+        kill(L.g); F.removed++; locals.splice(j,1); continue;
+      }
+      L.spd*=0.985;
+      L.g.position.x+=L.dir.x*L.spd; L.g.position.y+=L.dir.y*L.spd; L.g.position.z+=L.dir.z*L.spd;
+      if(!L.t || Date.now()-L.t>70){ L.t=Date.now(); spawnTrail(L.g.position.x,L.g.position.y,L.g.position.z); }
+      act++;
+    }
+
+    /* 粒子推进 */
+    var nowp=Date.now();
+    for(var q=parts.length-1;q>=0;q--){
+      var P=parts[q], d=(nowp-P.born)/P.life;
+      if(d>=1){ kill(P.g); parts.splice(q,1); continue; }
+      P.vy-=0.006;                       // 轻微重力
+      P.vx*=0.97; P.vy*=0.97; P.vz*=0.97;
+      P.g.position.x+=P.vx; P.g.position.y+=P.vy; P.g.position.z+=P.vz;
+      try{ P.g.material.opacity=Math.max(0,1-d); P.g.scale.setScalar(1-d*0.45); }catch(e){}
+      act++;
+    }
+    F.parts=parts.length;
+    F.active=act;
+  }
+  setInterval(sync, 120);
+
+  F.setSize=function(v){ F.size=Number(v)||0.85; for(var k in tracked){ var g=tracked[k];
+    for(var i=0;i<g.children.length;i++){ try{ g.children[i].geometry.dispose(); }catch(e){}
+      g.children[i].geometry=new T.PlaneGeometry(F.size,F.size); } } return F.size; };
+  F.setBurst=function(v){ F.burstOn = (v!==false); console.log('[fwrender] explosion toggle = '+F.burstOn); return F.burstOn; };
+  console.log('[fwrender] v7 enabled (vanilla tex + trail + explosion; starless rockets do not explode)');
+})();
+</script><!-- /fwrender -->
+
+
+<!-- breakfix --><script>
+/* AiAlec 挖掘预测修复 v2 (2026-09-21)
+   真因（源码实证 493 @1419172）：mineflayer dig() 的 finishDigging() 无条件执行
+       m._updateBlockState(Q.position, 0)   // ← 本地方块直接置空气
+   服务端 cancel（ArenaGuard 拦截大厅/场地）时不回发 block_change → blockUpdate 事件不触发
+   → 客户端本地空气永久残留 = "地毯/受保护方块能挖掉"；本地乐观掉落物 = "挖了不进背包"。
+   方案：启用客户端自带的 noBreakPositiveUpdate 开关（493 @1370277 startBreaking 已实现），
+        它把 bot._updateBlockState 换成空函数，挖掘一律等服务端回包。
+   副作用：仅丧失挖掘的本地即时预测；放方块预测走 botTryPlaceBlockPrediction，不受影响。
+   诊断：window.__breakFix */
+(function(){
+  var F = window.__breakFix = {ver:'v2', armed:0, patched:0, tries:0};
+
+  function arm(){
+    var b = window.bot;
+    if(!b || !b.mouse || !b.mouse.settings) return;
+    F.tries++;
+    var s = b.mouse.settings;
+    if(s.noBreakPositiveUpdate === true && b.__breakFixOn){ return; }
+    s.noBreakPositiveUpdate = true;
+    b.__breakFixOn = 1;
+    F.armed++;
+    F.patched = 1;
+    console.log('[breakfix] v2 enabled: noBreakPositiveUpdate=true (protected blocks no longer predicted-break)');
+  }
+
+  setInterval(arm, 500);
+})();
+</script><!-- /breakfix -->
+
+</head>
+<body>
+<div id="react-root"></div>
+    <div id="ui-root"></div>
+    <!-- inject script -->
+  <script defer src="./static/js/lib-polyfill.3b2a8d42.js"></script>
+<script defer src="./static/js/lib-react.2ae75c39.js"></script><script>/* UI-click guard: block world dig/place while a screen (inventory/chest/pause) is open so clicks on the overlay don't穿透到游戏内 */
+(function(){window.__webmcUIBlock=!1;function isScreenEl(el){if(!el||el.nodeType!==1)return!1;if(el.id==='viewer-canvas')return!1;var cl=el.classList;if(cl&&(cl.contains('mc-web-ping')||cl.contains('mc-web-pong')||cl.contains('mc-renderer-debug-overlay')))return!1;var s=getComputedStyle(el);if(s.display==='none'||s.visibility==='hidden')return!1;if(s.pointerEvents==='none')return!1;if(!(s.position==='fixed'||s.position==='absolute'))return!1;if(el.offsetWidth<window.innerWidth*.9||el.offsetHeight<window.innerHeight*.9)return!1;return!0}
+function scan(){var found=!1,why=null,inv=document.querySelector('.mc-inv-overlay, .mc-inv-root');if(inv){found=isScreenEl(inv);if(found)why=('inv:'+(inv.id||inv.className||'')).slice(0,60);}if(!found){var root=document.getElementById('root');if(root){var a=root.querySelectorAll('*');for(var i=0;i<a.length;i++){if(isScreenEl(a[i])){found=!0;why=('el:'+(a[i].id||a[i].className||a[i].tagName)+'').slice(0,60);break;}}}}if(scan.prev&&!found){window.__webmcUIBlockUntil=performance.now()+300;}scan.prev=found;var cd=performance.now()<(window.__webmcUIBlockUntil||0);if(cd){found=!0;why=(why||"")+"|cooldown";}window.__webmcUIBlock=found;window.__webmcUIBlockWhy=why;}
+/* uib16: 事件时精准命中测试——指针落点不在游戏画布上(被任意界面元素盖住)即视为界面点击 */
+window.__qOverUI=function(e){try{var cv=document.getElementById('viewer-canvas');if(!cv)return!!window.__webmcUIBlock;var el=document.elementFromPoint(e.clientX,e.clientY);return!el||(el!==cv&&!cv.contains(el));}catch(err){return!!window.__webmcUIBlock;}};
+setInterval(scan,120);window.addEventListener('load',scan);
+var r=document.getElementById('root');if(r)new MutationObserver(scan).observe(r,{childList:!0,subtree:!0});else new MutationObserver(function(){var x=document.getElementById('root');if(x){this.disconnect();new MutationObserver(scan).observe(x,{childList:!0,subtree:!0});scan();}}).observe(document.body,{childList:!0,subtree:!1});})();</script>
+<script>/* qremote v1: 其他玩家动作动画(进食/拉弓/举盾)——
+   读 mineflayer 实体 metadata[8](LivingEntity 手部活动标志 1=主手 2=副手)+heldItem,
+   直接写渲染实体的 userData._useItem/_usingItem(493.js 皮肤动画每帧消费)。 */
+(function(){ if(globalThis.__qRemote) return; var R=globalThis.__qRemote={sets:0,rel:0,miss:0};
+  function ents(){ try{ var r=window.appViewer&&window.appViewer.backend&&window.appViewer.backend.soundSystem&&window.appViewer.backend.soundSystem.worldRenderer; return (r&&r.entities)?r:null; }catch(e){ return null; } }
+  setInterval(function(){
+    var b=globalThis.bot, W=ents(); if(!b||!W) return;
+    try{
+      for(var id in b.entities){ var e=b.entities[id];
+        if(!e||e.type!=='player'||e===b.entity) continue;
+        var g=W.entities[id]; if(!g||!g.userData){ R.miss++; continue; }
+        var use=0; try{ var v=(e.metadata||[])[8]; if(typeof v==='number') use=v; else if(v&&typeof v[0]==='number') use=v[0]; }catch(_){}
+        var it=null; try{ it=e.heldItem; }catch(_e){}
+        var nm=(it&&it.name)||'';
+        if(use>0){ g.userData._useItem=(/shield/i.test(nm)?'shield':(nm||'apple')); g.userData._usingItem=1; R.sets++; }
+        else if(g.userData._usingItem){ g.userData._usingItem=0; R.rel++; }
+      }
+    }catch(e){}
+  },200);
+  console.log('[qremote] remote action driver v1 enabled (200ms poll)');
+})();
+</script>
+<script defer src="./static/js/493.dc3721ab.js"></script>
+  <script>
+      // AiAlec: 固定中文版(可改 localStorage wbLang=en 切回英文原版, 无可见按钮)
+      (function(){ try{
+        var lang=(window.WB_LANG||'zh');
+        var s=document.createElement('script'); s.defer=true;
+        s.src=(lang==='en') ? './static/js/index.alec2.js?v=chat4' : './static/js/index.alec2.zh.js?v=chat4';
+        document.body.appendChild(s);
+      }catch(e){} })();
+</script>
+<script defer src="./static/js/webmc_bookfix.js?v=bf10"></script><script defer src="./static/js/webmc_rpaccept.js?v=rp1"></script><script defer src="./static/js/webmc_usesess.js?v=us1"></script>
+<script defer src="./static/js/webmc_zh_dict.js?v=zd1"></script><script defer src="./static/js/webmc_eatdbg.js?v=d3"></script><script defer src="./static/js/webmc_heldfix.js?v=h1"></script><script defer src="./static/js/webmc_warmup.js?v=w2"></script><script defer src="./static/js/webmc_skin.js?v=rest1021"></script><script defer src="./static/js/webmc_title.js?v=dict3"></script><script defer src="./static/js/webmc_langpatch.js?v=dict2"></script><script defer src="./static/js/webmc_zh_search.js?v=zs3"></script><script defer src="./static/js/webmc_beacon.js?v=be1"></script><script defer src="./static/js/webmc_o2fix.js?v=o2f1"></script>
+  <script>/*wmc-autoupdate v10 — SW 保鲜：与 app 自带注册(裸URL)合一，不打架；旧版坏 SW 靠 update 拉新 */
+  (function(){
+    if(!('serviceWorker' in navigator)) return;
+    // 控制权变更（新 SW 接管页面）→ 自动刷新。justReloaded 盾：刚因 SW 刷新过就不要再刷，防循环
+    navigator.serviceWorker.addEventListener('controllerchange', function(){
+      try{ if(sessionStorage.getItem('wbSwJustReloaded')) return; sessionStorage.setItem('wbSwJustReloaded','1'); }catch(e){}
+      location.reload();
+    });
+    window.addEventListener('load', function(){
+      try{ sessionStorage.removeItem('wbSwJustReloaded'); }catch(e){}
+      try{
+        navigator.serviceWorker.getRegistrations().then(function(regs){
+          var jobs=[], i;
+          // 1) 强制 update 所有注册：陈旧页面里的旧代码不调 update → 旧 SW(坏 precache) 永不自愈，这里每次加载都拉一次
+          for(i=0;i<regs.length;i++) jobs.push(regs[i].update().catch(function(){}));
+          // 2) 补注册裸 URL（app 自身也注册同一个 URL，同 scope 同 URL 不会互相覆盖触发刷新）
+          jobs.push(navigator.serviceWorker.register('./service-worker.js').catch(function(){}));
+          return Promise.all(jobs);
+        }).catch(function(){});
+      }catch(e){}
+    });
+  })();
+  </script>
+
+<script>/*wmc-glprobe: 弱深度设备采集（透视适配用，仅华为/荣耀 UA 打印）*/
+(function(){
+  try{
+    var UA=navigator.userAgent||"";
+    if(!/HuaweiBrowser|Honor|HUAWEI|MRR-W29/i.test(UA)) return;
+    var c=document.createElement("canvas");
+    var gl=c.getContext("webgl2")||c.getContext("webgl");
+    if(!gl){ console.warn("[xray-diag] no WebGL"); return; }
+    var dbg=gl.getExtension("WEBGL_debug_renderer_info");
+    var info=dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):"(masked)";
+    var a=gl.getContextAttributes()||{};
+    console.info("[xray-diag] depthBits="+gl.getParameter(gl.DEPTH_BITS)+" maxTex="+gl.getParameter(gl.MAX_TEXTURE_SIZE)+" antialias="+a.antialias+" ver="+((UA.match(/HuaweiBrowser[^\s]*/)||["?"])[0])+" gpu="+info);
+  }catch(e){}
+})();
+</script>
+<script>/* 断线自动重连 rc3 —— 不刷新页面，同一账号，最多 10 次 */
+(function(){
+  /* ===== 断线自动重连：不刷新页面，同一账号，最多 10 次 ===== */
+  var MAX = 10, DELAY = 3000;
+  var opts = null, timer = null, tries = 0, pendingBot = null;
+  window.addEventListener('connect', function(e){ try{ if(e && e.detail) opts = e.detail; }catch(x){} }, true);
+  function getOpts(){
+    if(opts) return opts;
+    try{ var r = sessionStorage.getItem('reconnectOptions'); if(r){ var o = JSON.parse(r); if(o && o.value){ opts = o.value; return opts; } } }catch(e){}
+    try{ var l = localStorage.getItem('lastConnectOptions'); if(l){ var o2 = JSON.parse(l); if(o2){ opts = o2.value || o2; return opts; } } }catch(e){}
+    return null;
+  }
+  function stop(why){ if(timer){ clearInterval(timer); timer = null; } tries = 0; console.log('[reconnect] stopped: ' + why); }
+  function hook(){
+    var b = window.bot;
+    if(!b || !b._client || b.__rcHooked) return;
+    b.__rcHooked = true;
+    b._client.on('end', function(reason){
+      if(reason === 'disconnect.quitting') return;
+      if(timer) return;
+      if(!getOpts()){ console.log('[reconnect] no connection params, skip'); return; }
+      tries = 0;
+      console.log('[reconnect] disconnected (' + reason + '), auto-reconnect max ' + MAX + ' times');
+      timer = setInterval(function(){
+        if(tries >= MAX){ stop(MAX + ' 次都没成功'); return; }
+        tries++; pendingBot = window.bot;
+        console.log('[reconnect] attempt ' + tries + '/' + MAX + ' times');
+        try{ window.dispatchEvent(new CustomEvent('connect', { detail: getOpts() })); }catch(e){}
+      }, DELAY);
+    });
+  }
+  setInterval(hook, 600);
+  setInterval(function(){
+    if(timer && window.bot && window.bot !== pendingBot && window.bot.entity){ stop('已恢复（第 ' + tries + ' 次）'); }
+  }, 1000);
+})();
+
+</script>
+
+
+
+
+<!-- /p51 -->
+
+
+<!-- p51 位置包诊断 (movediag-v3) -->
+<script>
+(function(){
+  var D = window.__moveDiag = {ver:'v3', hooked:0, pos:0, look:0, big:0, local:0, maxD:0, events:[], err:null};
+  // ★q19 自动记录（只记录，不改变任何游戏行为）
+  var __q19Hits = [];
+  try{ var __q19saved = localStorage.getItem('__moveDiagHits'); if(__q19saved) __q19Hits = JSON.parse(__q19saved)||[]; }catch(e){}
+  var __q19Last = 0;
+  function q19AUTO(e){
+    try{
+      var now = Date.now();
+      if(now - __q19Last < 250) return;                 // 250ms 去重
+      __q19Last = now;
+      var p = window.bot && window.bot.entity && window.bot.entity.position;
+      var ent = window.bot && window.bot.entity;
+      var h = {
+        t: new Date().toISOString(),
+        kind: e.kind, d: e.d,
+        pos: p ? [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)] : null,
+        yaw: ent && ent.yaw != null ? +Number(ent.yaw).toFixed(1) : null,
+        pitch: ent && ent.pitch != null ? +Number(ent.pitch).toFixed(1) : null,
+        inside: e.inside, at: e.at,
+        dim: window.bot && window.bot.game ? window.bot.game.dimension : null
+      };
+      __q19Hits.push(h);
+      if(__q19Hits.length > 200) __q19Hits.splice(0, 100);
+      try{ localStorage.setItem('__moveDiagHits', JSON.stringify(__q19Hits.slice(-100))); }catch(err){}
+      console.warn('[moveDiag] bounce: ' + h.kind + ' d=' + h.d + ' @ ' + JSON.stringify(h.pos) +
+                   ' yaw=' + h.yaw + ' 世界=' + h.dim + ' 脚下方块=' + h.at + (h.inside ? ' ★在方块内' : ''));
+    }catch(err){}
+  }
+  window.__moveDiag.dumpHits = function(){
+    console.log('=== bounce log ' + __q19Hits.length + ' entries ===');
+    if(__q19Hits.length) console.table(__q19Hits.slice(-40)); else console.log('(no records yet)');
+    return __q19Hits.length;
+  };
+  window.__moveDiag.clearHits = function(){ __q19Hits = []; try{ localStorage.removeItem('__moveDiagHits'); }catch(e){} return 'cleared'; };
+  window.__moveDiag.exportHits = function(){ var t = JSON.stringify(__q19Hits.slice(-100), null, 1); console.log(t); return t; };
+  function blockAt(p){
+    try{ var b = window.bot && window.bot.world && p &&
+          window.bot.world.getBlock(Math.floor(p.x),Math.floor(p.y),Math.floor(p.z));
+      return b ? (b.name||'?') : 'air';
+    }catch(e){ return 'err'; }
+  }
+  function insideSolid(p){
+    var n = blockAt(p); return !(n==='air'||n==='?'||n==='err');
+  }
+  function hook(){
+    var b = window.bot;
+    if(!b || !b._client || b.__mdHook) return false;
+    b.__mdHook = 1; D.hooked = 1;
+    var last = null;
+    function rec(kind, p, extra){
+      var e = {t: Date.now()%1000000, kind: kind};
+      if(p){
+        e.x = +p.x.toFixed(2); e.y = +p.y.toFixed(2); e.z = +p.z.toFixed(2);
+        if(last) e.d = +Math.hypot(p.x-last.x, p.y-last.y, p.z-last.z).toFixed(2);
+        last = {x:p.x, y:p.y, z:p.z};
+      }
+      if(extra) for(var k in extra) e[k] = extra[k];
+      if(e.d != null && e.d > D.maxD) D.maxD = e.d;
+      D.events.push(e);
+      if(D.events.length > 400) D.events.splice(0, 200);
+      if(e.d != null && e.d > 0.5) q19AUTO(e);          // ★q19 自动记录
+    }
+    b._client.on('position', function(p){
+      D.pos++;
+      var c = b.entity && b.entity.position;
+      var d = c ? Math.hypot(p.x-c.x, p.y-c.y, p.z-c.z) : null;
+      if(d != null && d > 0.5) D.big++;
+      rec('server:position', p, {dist: d==null?'?':+d.toFixed(2), at: blockAt(c)});
+    });
+    b._client.on('position_look', function(p){
+      D.look++;
+      var c = b.entity && b.entity.position;
+      var d = c ? Math.hypot(p.x-c.x, p.y-c.y, p.z-c.z) : null;
+      if(d != null && d > 0.5) D.big++;
+      rec('server:pos_look', p, {dist: d==null?'?':+d.toFixed(2), at: blockAt(c)});
+    });
+    var prev = null;
+    b.on('physicsTick', function(){
+      var p = b.entity && b.entity.position;
+      if(!p) return;
+      if(prev){
+        var d = Math.hypot(p.x-prev.x, p.y-prev.y, p.z-prev.z);
+        if(d > 0.5){
+          D.local++;
+          var __lj = {t: Date.now()%1000000, kind:'local:jump', d:+d.toFixed(2),
+                         x:+p.x.toFixed(2), y:+p.y.toFixed(2), z:+p.z.toFixed(2),
+                         inside: insideSolid(p), at: blockAt(p)};
+          D.events.push(__lj);
+          if(D.events.length > 400) D.events.splice(0, 200);
+          q19AUTO(__lj);                                  // ★q19 自动记录
+        }
+      }
+      prev = {x:p.x, y:p.y, z:p.z};
+    });
+    console.log('[moveDiag] v3 hooked (bounce probe armed: run __moveDiag.dumpHits())');
+    return true;
+  }
+  var n=0, iv=setInterval(function(){ if(hook() || ++n>600) clearInterval(iv); }, 500);
+  window.addEventListener('gameLoaded', function(){ setTimeout(hook, 0); });
+  window.__moveDiag.dump = function(){
+    console.log('=== moveDiag v3 hooked='+D.hooked+' server:pos='+D.pos+
+                ' server:look='+D.look+' big(>0.5)='+D.big+' local:jump='+D.local+' maxD='+D.maxD);
+    if(D.events.length) console.table(D.events.slice(-80)); else console.log('(no events)');
+    return {hooked:D.hooked, pos:D.pos, look:D.look, big:D.big, local:D.local, maxD:D.maxD, n:D.events.length};
+  };
+  window.__moveDiag.reset = function(){
+    D.events=[]; D.pos=0; D.look=0; D.big=0; D.local=0; D.maxD=0; return 'reset';
+  };
+  window.__moveDiag.bigOnly = function(){
+    var b = D.events.filter(function(e){ return (e.d!=null && e.d>0.5) || e.kind==='local:jump'; });
+    console.table(b.slice(-60)); return b.length;
+  };
+})();
+</script>
+<!-- /p51-diag -->
+<!-- q2 同用户名卡死逃生口 (默认零副作用; 仅 URL 显式带 fixconn=1 时清一次) -->
+<script>
+(function(){
+  window.__fixconn = {ver:'v1', ran:0, cleared:[]};
+  try{
+    if(!/[?&]fixconn=1/.test(location.search)) return;
+    window.__fixconn.ran = 1;
+    try{ if(sessionStorage.getItem('reconnectOptions')){ sessionStorage.removeItem('reconnectOptions'); window.__fixconn.cleared.push('session.reconnectOptions'); } }catch(e){}
+    try{ if(localStorage.getItem('lastConnectOptions')){ localStorage.removeItem('lastConnectOptions'); window.__fixconn.cleared.push('local.lastConnectOptions'); } }catch(e){}
+    // 清掉 fixconn 参数，避免之后每次打开都清（也避免被误当成重复连接源）
+    try{
+      var u = new URL(location.href);
+      u.searchParams.delete('fixconn');
+      var q = u.searchParams.toString();
+      history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash);
+    }catch(e){}
+    console.log('[fixconn] cleared:', window.__fixconn.cleared.join(',') || '(nothing)');
+  }catch(e){ window.__fixconn.err = String(e); }
+})();
+</script>
+<!-- /q2 -->
+
+
+
+
+
+
+
+<!-- q12 音效桥 v1: sounds.js 映射表 + 音效包→本地播放 -->
+<script defer src="/sounds.js"></script>
+<script defer src="/sndmap.js"></script>
+<script>
+// 音效桥 v1 —— 把音效包（soundEffectHeard）接到 ThreeJsSound 本地播放
+// 依据：493.js 里 ThreeJsSound.playSound(pos, url, volume, pitch, timeout, maxDist)
+//   所有 sound_effect 包 → mineflayer emit("soundEffectHeard", soundName, pos, volume, pitch)
+//   但 bundle 内零消费者 → 完全没声音。
+// 本桥挂在 index.html，等 window.allSoundsMap（sounds.js）+ appViewer 就绪后接线。
+(function () {
+  var LOG = function () {
+    try { console.log.apply(console, ['[SoundBridge]'].concat([].slice.call(arguments))); } catch (e) {}
+  };
+  window.__soundBridge = { ver: 'v5', ready: false, played: 0, missed: 0, last: '', errors: [] };
+
+  // ---------- 1. 音效名 → 本地 URL ----------
+  // allSoundsMap[ver][id+"|"+name] = "id;path;vol,id;path;vol"
+  // 但 mineflayer 给的是 soundName 如 "minecraft:entity.generic.eat"
+  // 需要建"名字 → 候选路径列表"的索引。
+  var nameIndex = null;      // { "minecraft:entity.generic.eat": ["random/eat1","random/eat2","random/eat3"] }
+  var nameIndexPlain = null; // 同上，但去掉 minecraft: 前缀
+
+  function buildIndex() {
+    var all = window.allSoundsMap;
+    if (!all) return false;
+    // 挑版本：优先 1.20.4；没有就找最接近的
+    var ver = null;
+    ['1.20.4', '1.20.5', '1.20.3', '1.21', '1.20.2', '1.20', '1.19.4', '1.19.3', '1.19', '1.18.2', '1.18', '1.17', '1.16.5', '1.16'].some(function (v) {
+      if (all[v]) { ver = v; return true; }
+      return false;
+    });
+    if (!ver) {
+      // 兜底：取 keys 里最大的
+      var ks = Object.keys(all);
+      ver = ks[ks.length - 1];
+    }
+    var tbl = all[ver];
+    if (!tbl) return false;
+    var idx = {}, idx2 = {};
+    for (var k in tbl) {
+      // k 形如 "575;entity.generic.eat"
+      var name = k;
+      var semi = k.indexOf(';');
+      if (semi >= 0) name = k.slice(semi + 1);
+      // 值形如 "1;random/eat1;1,1;random/eat2;1"
+      var v = tbl[k];
+      if (!v) continue;
+      var paths = [];
+      v.split(',').forEach(function (part) {
+        var seg = part.split(';');
+        // seg: [id, path, vol]
+        if (seg.length >= 2 && seg[1]) paths.push(seg[1]);
+      });
+      if (!paths.length) continue;
+      var full = 'minecraft:' + name;
+      if (!idx[full]) idx[full] = [];
+      idx[full] = idx[full].concat(paths);
+      if (!idx2[name]) idx2[name] = [];
+      idx2[name] = idx2[name].concat(paths);
+    }
+    nameIndex = idx;
+    nameIndexPlain = idx2;
+    window.__soundBridge.version = ver;
+    window.__soundBridge.names = Object.keys(idx).length;
+    LOG('索引已建立 ver=' + ver + ' 名字数=' + window.__soundBridge.names);
+    return true;
+  }
+
+  function urlOf(path) {
+    // sounds.js 里的 path 形如 "random/eat1"（无扩展名）
+    return '/sounds/minecraft/sounds/' + path + '.mp3';
+  }
+
+  // ---------- 2. 播放 ----------
+  var audioCtxUnlocked = false;
+
+  function playAt(soundName, pos, volume, pitch) {
+    var av = window.appViewer;
+    if (!av) return false;
+    var wr = av.backend && av.backend.soundSystem && av.backend.soundSystem.worldRenderer;
+    var ss = wr && wr.soundSystem;
+    if (!ss || typeof ss.playSound !== 'function') { window.__soundBridge.missed++; window.__soundBridge.missWhy = 'noSS'; return false; }
+
+    var paths = null;
+    if (nameIndex) paths = nameIndex[soundName];
+    if (!paths && nameIndexPlain) {
+      var plain = soundName.replace(/^minecraft:/, '');
+      paths = nameIndexPlain[plain];
+      // "entity.generic.eat" 这种带点的，也试下划线形式
+      if (!paths) paths = nameIndexPlain[plain.replace(/\./g, '_')];
+      if (!paths) paths = nameIndexPlain[soundName.replace(/^minecraft:/, '').replace(/\./g, '_')];
+    }
+    if (!paths || !paths.length) { window.__soundBridge.missed++; window.__soundBridge.missWhy = 'noPath:' + soundName; return false; }
+
+    var path = paths[Math.floor(Math.random() * paths.length)];
+    var url = urlOf(path);
+
+    var p = pos || (wr.cameraWorldPos || { x: 0, y: 0, z: 0 });
+    var vol = (typeof volume === 'number' && volume > 0) ? Math.min(volume, 4) : 1;
+    var pt = (typeof pitch === 'number' && pitch > 0) ? pitch : 1;
+    // mineflayer pitch 是 63 进制（0~63），转成 1 附近
+    if (pt > 8) pt = pt / 63 * 2;
+    if (pt <= 0) pt = 1;
+
+    try {
+      ss.playSound({ x: p.x, y: p.y, z: p.z }, url, vol, pt, 8000, 16);
+      window.__soundBridge.played++;
+      window.__soundBridge.lastPlayAt = Date.now();
+      window.__soundBridge.last = soundName + ' → ' + url;
+      return true;
+    } catch (e) {
+      window.__soundBridge.errors.push(String(e));
+      return false;
+    }
+  }
+
+  // ---------- 2.5 音效 id -> 名字(多路兜底) ----------
+  function resolveSoundName(idOrName) {
+    if (idOrName === null || idOrName === undefined) return null;
+    if (typeof idOrName === 'string' && idOrName.indexOf('.') > 0) return idOrName;
+    var b = globalThis.bot;
+    var reg = b && b.registry && b.registry.sounds;
+    // ★uib16: registry(已换 1.20.4 官方表)优先；__SOUND_ID_MAP 为旧版顺序, 只作兜底——
+    //          之前 map 优先会把 Paper1.20.4 的 hurt id 错译成羊驼系音效
+    if (reg) {
+      if (reg[idOrName] && reg[idOrName].name) return reg[idOrName].name;
+      for (var k in reg) {
+        var e = reg[k];
+        if (e && e.id === idOrName) return e.name || k;
+      }
+    }
+    if (globalThis.__SOUND_ID_MAP) {
+      var nm0 = globalThis.__SOUND_ID_MAP[String(idOrName)];
+      if (nm0) return nm0;
+    }
+    return null;
+  }
+
+  window.__soundBridge.playAt = playAt;
+  // ---------- 3. 接线 ----------
+  function hookBot() {
+    var av = window.appViewer;
+    // ★q19: globalThis.bot 才是真正收包的实例；appViewer 上的 bot 可能不是同一个。
+    //        三个候选全部尝试挂载，各自去重，避免"挂错对象后永不重试"。
+    var cands = [];
+    if (globalThis.bot) cands.push(globalThis.bot);
+    if (av && av.bot && av.bot !== globalThis.bot) cands.push(av.bot);
+    if (av && av.backend && av.backend.bot && cands.indexOf(av.backend.bot) < 0) cands.push(av.backend.bot);
+    var any = false;
+    for (var ci = 0; ci < cands.length; ci++) {
+      if (hookOne(cands[ci])) any = true;
+    }
+    if (!any) return false;
+    LOG('已接线 bot');
+    window.__soundBridge.ready = true;
+    return true;
+  }
+
+  function hookOne(bot) {
+    if (!bot || !bot._client) return false;
+    if (bot.__soundBridgeHooked) return true;
+    bot.__soundBridgeHooked = true;
+
+    // mineflayer injector 注册的 "soundEffectHeard" / "hardcodedSoundEffectHeard"
+    bot.on('soundEffectHeard', function (soundName, pos, volume, pitch) {
+      // ★uib17: 只同步玩家的受伤/死亡音效；动物/生物的交给客户端原生逻辑，不做额外同步
+      try{ if(/^entity\./.test(soundName)&&!/entity\.player\./.test(soundName)&&/\.(hurt|death)/.test(soundName)) return; }catch(e){}
+      /* q21: 玩家自身 eat/burp 贴脸播放——服务端定位包在移动中距离衰减致"时有时无" */
+      try{ var sn0=String(soundName).replace(/^minecraft:/,''); if(/^(entity\.generic\.eat|entity\.player\.burp)/.test(sn0)){ var bp=bot&&bot.entity&&bot.entity.position; if(!pos||(bp&&pos&&bp.distanceTo(pos)<5)){ pos=null; volume=Math.max(typeof volume==='number'?volume:0,0.9); } } }catch(e){}
+      playAt(soundName, pos, volume, pitch);
+    });
+    bot.on('hardcodedSoundEffectHeard', function (soundId, category, pos, volume, pitch) {
+      window.__soundBridge.hc = (window.__soundBridge.hc || 0) + 1;
+      var nm = resolveSoundName(soundId);
+      window.__soundBridge.lastId = soundId + ' -> ' + (nm || 'NULL');
+      /* q21: eat/burp 贴脸（同上） */
+      if (nm) { try{ var sn1=String(nm).replace(/^minecraft:/,''); if(/^(entity\.generic\.eat|entity\.player\.burp)/.test(sn1)){ var bp2=bot&&bot.entity&&bot.entity.position; if(!pos||(bp2&&pos&&bp2.distanceTo(pos)<5)){ pos=null; volume=Math.max(typeof volume==='number'?volume:0,0.9); } } }catch(e){} playAt(nm, pos, volume, pitch); }
+      else window.__soundBridge.noName = (window.__soundBridge.noName || 0) + 1;
+    });
+
+    // ★uib16: 移除 bot._client 原始包双播路径——与 mineflayer soundEffectHeard 对同一包各播一次，
+    //         且旧的解析顺序不同 → 「咔嚓后跟一声羊驼叫」。现在只走 soundEffectHeard 单路。
+
+    return true;
+  }
+
+  // 首次用户交互解锁 AudioContext
+  function unlock() {
+    if (audioCtxUnlocked) return;
+    try {
+      var av = window.appViewer;
+      var wr = av && av.backend && av.backend.soundSystem && av.backend.soundSystem.worldRenderer;
+      var ss = wr && wr.soundSystem;
+      if (ss) {
+        ss.initAudioListener && ss.initAudioListener();
+        var ctx = ss.audioListener && ss.audioListener.context;
+        if (ctx && ctx.state === 'suspended') { ctx.resume(); }
+        audioCtxUnlocked = true;
+        LOG('AudioContext 已解锁', ctx && ctx.state);
+      }
+    } catch (e) {}
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(function (ev) {
+    window.addEventListener(ev, unlock, { once: false, passive: true });
+  });
+
+  // ---------- 4. 轮询就绪 ----------
+  var tries = 0;
+  var iv = setInterval(function () {
+    tries++;
+    if (tries > 240) { clearInterval(iv); LOG('放弃（未就绪）'); return; }
+    if (!nameIndex && !buildIndex()) return;      // 等 sounds.js
+    if (hookBot()) clearInterval(iv);
+  }, 500);
+
+  // 暴露手动重载
+  window.__soundBridge.reload = function () { nameIndex = null; buildIndex(); return hookBot(); };
+  window.__soundBridge.test = function (name) {
+    return playAt(name || 'minecraft:entity.generic.eat', null, 1, 1);
+  };
+})();
+
+</script>
+<!-- /q12 -->
+<!-- q15 重复块已删除：原第一段带 buttons.fill(false) 清键逻辑且先执行占坑 __q15，导致修复版未装上（挖/放/攻击全失效根因） -->
+<!-- q16 输入保活 v2：补齐 mousedown 守卫里被弹窗卡住的 isGameActive -->
+<script>
+(function () {
+  if (globalThis.__q16) return;
+  var d = globalThis.__q16 = { down: 0, up: 0, fired: 0, skipped: 0, blocked: 0, last: null, blockWhy: null };
+
+  function botOk() {
+    var b = globalThis.bot;
+    return !!(b && b.mouse && b.mouse.buttons && typeof b.rightClickStart === 'function');
+  }
+  // q16b: 不再依赖 miscUiState.gameLoaded（app-status 弹窗期间为 false），bot 就绪即放行
+  function ready() { return botOk(); }
+
+  function onDown(e) {
+    if (e.button !== 2 && e.button !== 0) return;
+    if (window.__webmcUIBlock || (window.__qOverUI && window.__qOverUI(e))) { d.blocked = (d.blocked||0)+1; d.blockWhy = "uiBlock"; return; }
+    if (!ready() || !botOk()) {
+      d.blocked = (d.blocked || 0) + 1;
+      d.blockWhy = (function(){ try { return { gameLoaded: !!(globalThis.miscUiState && globalThis.miscUiState.gameLoaded), bot: !!globalThis.bot, mouse: !!(globalThis.bot && globalThis.bot.mouse) }; } catch (e) { return 'err'; } })();
+      return;
+    }
+    d.down++;
+    var b = globalThis.bot, M = b.mouse;
+    var idx = e.button === 0 ? 0 : 2;
+    d.last = { button: e.button, already: !!M.buttons[idx],
+               modals: (globalThis.activeModalStack || []).length,
+               target: (e.target && (e.target.id || e.target.tagName)) || '-' };
+    // 原生链路已置位 ⇒ 不重复调用（避免 update() 被跑两遍）
+    if (M.buttons[idx]) { d.skipped++; return; }
+    try {
+      if (e.button === 0) b.leftClickStart(); else b.rightClickStart();
+      d.fired++;
+    } catch (err) {}
+  }
+
+  function onUp(e) {
+    if (e.button !== 2 && e.button !== 0) return;
+    if (!ready() || !botOk()) return;
+    d.up++;
+    try {
+      if (e.button === 0) bLeft(); else bRight();
+    } catch (err) {}
+    function bLeft() { var b = globalThis.bot; if (b && b.leftClickEnd) b.leftClickEnd(); }
+    function bRight() { var b = globalThis.bot; if (b && b.rightClickEnd) b.rightClickEnd(); }
+  }
+
+  // ★ 捕获阶段 = 最先执行，不受任何冒泡监听器影响
+  document.addEventListener('mousedown', onDown, true);
+  document.addEventListener('mouseup', onUp, true);
+  // 兜底：失焦时释放，避免卡键
+  window.addEventListener('blur', function () {
+    try { var b = globalThis.bot; b && b.rightClickEnd && b.rightClickEnd(); } catch (e) {}
+  });
+})();
+</script>
+<!-- /q16 -->
+<!-- q15 输入保活 v1：接管 beforeUpdateChecks，避免每帧清空鼠标按键导致右键失效 -->
+<script>
+(function () {
+  if (globalThis.__q15) return;
+  var d = globalThis.__q15 = { installs: 0, clears: 0, last: {} };
+
+  function ourHook() {
+    var focus = true, modals = -1, loaded = null, btn2 = false;
+    try { focus = document.hasFocus(); } catch (e) {}
+    try { modals = (globalThis.activeModalStack || []).length; } catch (e) {}
+    try { loaded = !!(globalThis.miscUiState && globalThis.miscUiState.gameLoaded); } catch (e) {}
+    try { btn2 = !!(this.buttons && this.buttons[2]); } catch (e) {}
+    d.last = { focus: focus, modals: modals, gameLoaded: loaded, btn2: btn2 };
+    // 不再清空按键：iframe/内嵌环境下 document.hasFocus() 常返回 false，
+    // 会导致每帧清空 buttons，使攻击/挖/放全部失效（回归）。真失焦释放由 q16 的 window blur 监听处理。
+  }
+
+  setInterval(function () {
+    try {
+      var bot = globalThis.bot;
+      if (!bot || !bot.mouse) return;
+      var M = bot.mouse;
+      if (M.__q15fn === ourHook && M.beforeUpdateChecks === ourHook) return;
+      M.__q15fn = ourHook;
+      M.beforeUpdateChecks = ourHook;   // 若被 domListeners 重新赋值，300ms 内自动夺回
+      d.installs++;
+    } catch (e) {}
+  }, 300);
+})();
+</script>
+<!-- /q15 -->
+<!-- q21 使用动作驱动 v1：右键 → bot.consume()/activateItem()（原版发包 + usingHeldItem 动画）
+     真因：本客户端 bundle 未注册 itemUseHandlers ⇒ use_item 包永不发出 ⇒ 服务端无 consume
+           ⇒ 无进食动画(493.js 读 bot.usingHeldItem)/无咀嚼音效/无饱食效果。
+     修法：捕获阶段接管右键按下，直接调 mineflayer 原生 bot.consume()（食物）/ activateItem()（其他），
+           松开时 bot.deactivateItem()。走的是 bundle 内部 activateItem() ⇒ 自动发 use_item + 置 usingHeldItem。 -->
+<script>
+(function () {
+  if (globalThis.__q21) return;
+  var d = globalThis.__q21 = { down: 0, consume: 0, activate: 0, deactivate: 0, skip: 0, err: [], last: null };
+  console.log('[useitem] v1 enabled (right-click -> bot.consume/activateItem)');
+
+  // 可食用物品名（1.20.4，取自原版 food 组件；与 bundle 内 ed 白名单一致）
+  var FOODS = {
+    apple: 1, golden_apple: 1, enchanted_golden_apple: 1, bread: 1, porkchop: 1, cooked_porkchop: 1,
+    cod: 1, cooked_cod: 1, salmon: 1, cooked_salmon: 1, tropical_fish: 1, pufferfish: 1,
+    beef: 1, cooked_beef: 1, chicken: 1, cooked_chicken: 1, mutton: 1, cooked_mutton: 1,
+    rabbit: 1, cooked_rabbit: 1, rotten_flesh: 1, spider_eye: 1, carrot: 1, golden_carrot: 1,
+    potato: 1, baked_potato: 1, poisonous_potato: 1, beetroot: 1, beetroot_soup: 1,
+    mushroom_stew: 1, rabbit_stew: 1, suspicious_stew: 1, pumpkin_pie: 1, cookie: 1,
+    melon_slice: 1, sweet_berries: 1, glow_berries: 1, dried_kelp: 1, honey_bottle: 1,
+    kelp: 1, cake: 1, milk_bucket: 1, potion: 1
+  };
+
+  function held() {
+    try { return (globalThis.bot && globalThis.bot.heldItem) || null; } catch (e) { return null; }
+  }
+
+  function doUse() {
+    var b = globalThis.bot;
+    if (!b) { d.skip++; return; }
+    if (window.__webmcUIBlock) { d.skip++; return; }   // 界面打开不穿透（#250 兼容：右键只操作界面）
+    // 防卡死：若仍处使用态先复位，否则 consume 会 reject "Already using held item" 永久锁死进食
+    if (b.usingHeldItem) { try { b.deactivateItem(); } catch (e) {} }
+    var it = held();
+    var nm = it && it.name;
+    d.last = { item: nm, food: b.food, using: !!b.usingHeldItem, gm: b.game && b.game.gameMode };
+    try {
+      var _isShield = nm && /shield/.test(nm);
+      var _isBow = nm && /bow/.test(nm);
+      if (nm && FOODS[nm] && b.consume) {
+        if (b.food >= 20) { d.skip++; }                // 饱食度满：原版不可进食，跳过避免 30s 悬挂
+        else {
+          d.consume++;
+          // bot.consume() 内部：activateItem() 发 use_item + 置 usingHeldItem ⇒ 动画+音效+效果
+          var pr = b.consume();
+          if (pr && pr.catch) pr.catch(function (e) { d.err.push(String(e && e.message || e).slice(0, 90)); });
+        }
+      } else if ((_isShield || _isBow) && b.activateItem) {
+        d.activate++;
+        b.activateItem();   // 举盾/射箭：q21 驱动（原生 handler 亦会处理，双触发无害）
+      } else {
+        d.skip++;           // 方块/其他：完全交还客户端原生 handler（放方块/交互），q21 不拦截
+        return;
+      }
+    } catch (e) {
+      d.err.push(String(e && e.message || e).slice(0, 90));
+    }
+  }
+
+  function doStop() {
+    var b = globalThis.bot;
+    if (!b) return;
+    try { if (b.deactivateItem) { b.deactivateItem(); d.deactivate++; } } catch (e) {}
+  }
+
+  // ★ 捕获阶段：最先拿到右键事件，不受任何冒泡/弹窗影响
+  document.addEventListener('mousedown', function (e) {
+    if (e.button !== 2) return;
+    if (window.__webmcUIBlock || (window.__qOverUI && window.__qOverUI(e))) { d.skip++; return; }   // 界面打开：右键只操作界面，不触发游戏进食
+    d.down++;
+    doUse();
+  }, true);
+
+  document.addEventListener('mouseup', function (e) {
+    if (e.button !== 2) return;
+    // 吃食物是一次性 consume（自带完成回调），无需 deactivate；仅通用使用态需要收手
+    var it = held(), nm = it && it.name;
+    if (!(nm && FOODS[nm])) doStop();
+  }, true);
+
+  window.addEventListener('blur', function () { doStop(); });
+})();
+</script>
+<!-- /q21 -->
+<script>
+/* q22eatfx v1: 服务端进食掉渣粒子(item particle) -> 本地渲染 */
+(function () {
+  if (globalThis.__eatFx) return;
+  var F = globalThis.__eatFx = { spawned: 0, events: 0, miss: 0, err: [] };
+  var COLORS = { golden_apple: 0xd7b45a, enchanted_golden_apple: 0xe8d28a, apple: 0xc23b3b,
+    bread: 0xa9773f, cooked_beef: 0x8a4a32, cooked_porkchop: 0x9a5a3a, cooked_chicken: 0xb98a4a,
+    cookie: 0x9a6b3f, sweet_berries: 0xb03a5a, carrot: 0xd98030, baked_potato: 0xc9a45a,
+    pumpkin_pie: 0xc08a3a, cake: 0xe8d8c0 };
+  function wr() {
+    try { return window.appViewer.backend.soundSystem.worldRenderer; } catch (e) { return null; }
+  }
+  function ppos(p) {
+    if (!p) return null;
+    if (p.position && p.position.x !== undefined) return p.position;
+    if (p.positionVector) return p.positionVector;
+    if (p.x !== undefined) return p;
+    return null;
+  }
+  function spawn(pos, item) {
+    var W = wr(); if (!W || !W.sceneOrigin || !window.THREE) { F.miss++; return; }
+    var col = COLORS[(item || '').replace(/^minecraft:/, '')] || 0x8a5a2b;
+    var n = 0;
+    for (var i = 0; i < 8; i++) {
+      try {
+        var geo = new THREE.BoxGeometry(0.055, 0.055, 0.055);
+        var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: col }));
+        W.sceneOrigin.add(mesh);
+        mesh.position.set(pos.x + (Math.random() - 0.5) * 0.55, pos.y - 0.4 + Math.random() * 0.4, pos.z + (Math.random() - 0.5) * 0.55);
+        var vx = (Math.random() - 0.5) * 0.06, vy = Math.random() * 0.05 + 0.02, vz = (Math.random() - 0.5) * 0.06;
+        var t0 = performance.now();
+        (function fall() {
+          try {
+            var dt = performance.now() - t0;
+            if (dt > 900 || !mesh.parent) { if (mesh.parent) W.sceneOrigin.remove(mesh); return; }
+            mesh.position.x += vx; mesh.position.y += vy; mesh.position.z += vz; vy -= 0.0035;
+            requestAnimationFrame(fall);
+          } catch (e) {}
+        })();
+        n++;
+      } catch (e) {}
+    }
+    if (n) F.spawned++;
+  }
+  setInterval(function () {
+    var b = globalThis.bot; if (!b || b.__eatFxHooked) return; b.__eatFxHooked = 1;
+    try {
+      b.on('particle', function (part, pos2) {
+        try {
+          F.events++;
+          var p = pos2 && pos2.x !== undefined ? pos2 : (part && (part.position || part.positionVector));
+          if (!p) return;
+          var my = globalThis.bot && globalThis.bot.entity && globalThis.bot.entity.position;
+          if (my && Math.abs(p.x - my.x) + Math.abs(p.y - my.y) + Math.abs(p.z - my.z) > 40) return;
+          var t = part && part.name;
+          if (t && t !== 'item') return;
+          var item = (part && ((part.data && part.data.stack && part.data.stack.name) || part.item)) || '';
+          spawn(p, item);
+        } catch (e) { F.err.push(String(e).slice(0, 60)); }
+      });
+      F.hooked = 1;
+    } catch (e) { F.err.push(String(e).slice(0, 60)); }
+  }, 700);
+})();
+</script>
+<!-- q32guiatlas v1 --><script>
+(function(){
+  if(globalThis.__guiAtlasCache) return;
+  var DB='webmc-guiatlas', ST='atlas';
+  function idb(){return new Promise(function(res,rej){var r=indexedDB.open(DB,1);r.onupgradeneeded=function(){try{r.result.createObjectStore(ST)}catch(e){}};r.onsuccess=function(){res(r.result)};r.onerror=function(){rej(r.error)}})}
+  function gk(db,k){return new Promise(function(res){try{var t=db.transaction(ST).objectStore(ST).get(k);t.onsuccess=function(){res(t.result||null)};t.onerror=function(){res(null)}}catch(e){res(null)}})}
+  function sk(db,k,v){try{db.transaction(ST,'readwrite').objectStore(ST).put(v,k)}catch(e){}}
+  function fnv(str){var h=0x811c9dc5;for(var i=0;i<str.length;i++){h^=str.charCodeAt(i);h=(h*0x01000193)>>>0}return h.toString(36)}
+  globalThis.__guiAtlasCache=async function(m,S,O){
+    var out={hit:false};
+    try{
+      var cr=m.resourcesManager.currentResources;
+      var bimg=cr.blocksAtlasImage;
+      var tcount=0;try{tcount=Object.keys(m.resourcesManager.blocksAtlasParser.atlas.latest.textures).length}catch(e){}
+      var key='ga2-'+Object.keys(S).length+'-'+Object.keys(O).length+'-'+fnv(Object.keys(S).join('|'))+'-'+fnv(Object.keys(O).join('|'))+'-'+(bimg?bimg.width+'x'+bimg.height:'-')+'-'+tcount;
+      out.fp=key;
+      var db=await idb(); globalThis.__guiAtlasDb=db;
+      var rec=await gk(db,key);
+      if(!rec||!rec.json||!rec.blob){console.log('[guiatlas] miss '+key);return out}
+      var bmp=await createImageBitmap(rec.blob);
+      cr.guiAtlas={json:rec.json,image:bmp};
+      out.hit=true;
+      console.log('[guiatlas] HIT '+key);
+    }catch(e){console.log('[guiatlas] err '+e.message)}
+    return out;
+  };
+  globalThis.__guiAtlasSave=async function(m,fp){
+    try{
+      if(!fp) return;
+      var g=m.resourcesManager.currentResources.guiAtlas;
+      if(!g||!g.json||!g.image) return;
+      var cv=document.createElement('canvas');cv.width=g.image.width;cv.height=g.image.height;
+      cv.getContext('2d').drawImage(g.image,0,0);
+      var blob=await new Promise(function(res){cv.toBlob(function(b){res(b)},'image/png')});
+      if(!blob) return;
+      var db=globalThis.__guiAtlasDb||await idb();
+      sk(db,fp,{json:g.json,blob:blob,at:Date.now()});
+      console.log('[guiatlas] saved '+fp+' '+Math.round(blob.size/1024)+'KB');
+    }catch(e){console.log('[guiatlas] saveErr '+e.message)}
+  };
+})();
+</script>
+<!-- q32bparticles v5 q19bfx2 --><script>
+(function () {
+  var F = globalThis.__bfx = { ver: 'v3', hooked: 0, bursts: 0, parts: 0, skipNoTex: 0, noT: 0, noScene: 0, sceneFb: 0, err: [] };
+  var TEX = null, MAT = null, LIVE = [];
+
+  function rmGet() { var av = globalThis.appViewer; return (av && av.resourcesManager) || null; }
+  function wrGet() { try { return globalThis.appViewer.backend.soundSystem.worldRenderer; } catch (e) { return null; } }
+
+  function getTex() {
+    if (TEX) return TEX;
+    try {
+      var rm = rmGet(); if (!rm) return null;
+      var cr = rm.currentResources; if (!cr || !cr.blocksAtlasImage) return null;
+      var T = globalThis.THREE; if (!T) return null;
+      var t = new T.Texture(cr.blocksAtlasImage);
+      t.flipY = false; t.magFilter = T.NearestFilter; t.minFilter = T.NearestFilter;
+      t.generateMipmaps = false; t.needsUpdate = true;
+      TEX = t;
+      MAT = new T.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false });
+      return TEX;
+    } catch (e) { if (F.err.length < 5) F.err.push('tex:' + String(e).slice(0, 50)); return null; }
+  }
+
+  function uvFor(name) {
+    try {
+      var rm = rmGet(); if (!rm || !rm.blocksAtlasParser || !rm.blocksAtlasParser.atlas || !rm.blocksAtlasParser.atlas.latest) return null;
+      var tex = rm.blocksAtlasParser.atlas.latest.textures;
+      var e0 = tex[name];
+      if (e0) return e0;
+      var alt = ['_top', '_side', '_front', '_planks', '_in', '_end'];
+      for (var j = 0; j < alt.length; j++) { var e1 = tex[name + alt[j]]; if (e1) return e1; }
+      var e2 = tex['block/' + name];
+      if (e2) return e2;
+      return null;
+    } catch (e) { return null; }
+  }
+
+  function sceneRef() {
+    try {
+      var wr = wrGet();
+      if (wr && wr.sceneOrigin) return { so: wr.sceneOrigin, cam: wr.camera, scene: wr.scene, hasTrack: typeof wr.sceneOrigin.addAndTrack === 'function' };
+    } catch (e) {}
+    return null;
+  }
+
+  function detach(m, sc) {
+    try { if (m.parent) m.parent.remove(m); } catch (e) {}
+  }
+
+  function kill(g) {
+    for (var i = 0; i < g.meshes.length; i++) {
+      try { detach(g.meshes[i], g.scene); g.meshes[i].geometry.dispose(); } catch (e) {}
+    }
+    try { g.mat.dispose(); } catch (e) {}
+  }
+
+  function burst(pos, name) {
+    var T = globalThis.THREE; if (!T) { F.noT = (F.noT || 0) + 1; return; }
+    if (!getTex() || !MAT) { F.skipNoTex++; return; }
+    var uv = uvFor(name);
+    if (!uv) { F.skipNoTex++; return; }
+    var sc = sceneRef(); if (!sc) { F.noScene = (F.noScene || 0) + 1; return; }
+    if (LIVE.length > 24) { kill(LIVE.shift()); }
+    var suS = 0.015625; try { suS = rmGet().blocksAtlasParser.atlas.latest.suSv || suS; } catch (e) {}
+    var su = (uv.su != null ? uv.su : suS), sv = (uv.sv != null ? uv.sv : suS);
+    var mat = MAT.clone();
+    var grp = { meshes: [], vels: [], life: 0.55 + Math.random() * 0.4, t: 0, mat: mat, scene: sc };
+    var bp = (globalThis.bot && globalThis.bot.entity && globalThis.bot.entity.position) || { x: 0, y: 0, z: 0 };
+    for (var i = 0; i < 10; i++) {
+      var g = new T.PlaneGeometry(0.1, 0.1);
+      var a = g.attributes.uv;
+      var dx = Math.random() * 0.7, dy = Math.random() * 0.7;
+      var u0 = uv.u + dx * su, v0 = uv.v + dy * sv, u1 = u0 + su * 0.28, v1 = v0 + sv * 0.28;
+      a.setXY(0, u0, v1); a.setXY(1, u1, v1); a.setXY(2, u0, v0); a.setXY(3, u1, v0);
+      var m = new T.Mesh(g, mat);
+      var wx = pos.x + (Math.random() - 0.5) * 0.8,
+          wy = pos.y + (Math.random() - 0.5) * 0.8,
+          wz = pos.z + (Math.random() - 0.5) * 0.8;
+      var added = false;
+      if (sc.hasTrack) { try { sc.so.addAndTrack(m); m.position.set(wx, wy, wz); added = true; F.viaTrack = (F.viaTrack || 0) + 1; } catch (e0) { if (F.err.length < 5) F.err.push('track:' + String(e0).slice(0, 60)); } }
+      if (!added) { try { sc.scene.add(m); m.position.set(wx - bp.x, wy - bp.y, wz - bp.z); added = true; F.sceneFb = (F.sceneFb || 0) + 1; } catch (e2) { if (F.err.length < 5) F.err.push('add:' + String(e2).slice(0, 60)); try { g.dispose(); } catch (e3) {} continue; } }
+      m.position.set(wx - bp.x, wy - bp.y, wz - bp.z);
+      grp.meshes.push(m);
+      grp.vels.push({ x: (Math.random() - 0.5) * 3.2, y: Math.random() * 3.4 + 1.2, z: (Math.random() - 0.5) * 3.2 });
+    }
+    if (!grp.meshes.length) { try { mat.dispose(); } catch (e4) {} return; }
+    LIVE.push(grp); F.bursts++; F.parts += grp.meshes.length;
+    if (!F._loop) { F._loop = 1; loop(); }
+  }
+  F.burst = burst;
+
+  var last = 0;
+  function loop() {
+    requestAnimationFrame(loop);
+    var now = performance.now(); if (now - last < 33) return;
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    for (var i = LIVE.length - 1; i >= 0; i--) {
+      var g = LIVE[i]; g.t += dt;
+      if (g.t >= g.life) { kill(g); LIVE.splice(i, 1); continue; }
+      g.mat.opacity = Math.min(1, (1 - g.t / g.life) * 1.6);
+      for (var j = 0; j < g.meshes.length; j++) {
+        var m = g.meshes[j], v = g.vels[j];
+        v.y -= 16 * dt;
+        m.position.x += v.x * dt; m.position.y += v.y * dt; m.position.z += v.z * dt;
+        try { m.quaternion.copy(g.scene.cam.quaternion); } catch (e) {}
+      }
+    }
+  }
+
+  function hook() {
+    var b = globalThis.bot;
+    if (!b || typeof b.on !== 'function' || b.__bfxHooked) return;
+    b.__bfxHooked = 1; F.hooked = 1;
+    b.on('blockUpdate', function (oldB, newB) {
+      try {
+        F.ev = (F.ev || 0) + 1; F.lastEv = [oldB && oldB.name, newB && newB.name, newB && newB.stateId];
+        if (!newB || newB.stateId !== 0 || !oldB || !oldB.position) return;
+        var p = oldB.position;
+        burst({ x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 }, String(oldB.name || '').replace(/^minecraft:/, ''));
+      } catch (e) { if (F.err.length < 5) F.err.push(String(e).slice(0, 50)); }
+    });
+    console.log('[bfx] v5 enabled (vanilla-texture block break particles)');
+  }
+  setInterval(hook, 800); hook();
+})();
+</script>
+<!-- q47 箭实体兜底渲染 v1：bundle 的 Bedrock arrow 模型管线失败时箭完全不可见（用户长期反馈"飞出去看不到"）。
+     这里轮询 bot.entities 的 arrow/spectral_arrow/trident，自建高可见网格（杆+锥头）挂到 sceneOrigin（世界坐标），
+     方向=速度方向（速度≈0 时用 yaw/pitch 朝向），实体消失即回收。纯增量渲染，不影响 bundle 自身逻辑。 -->
+<script>
+(function () {
+  if (globalThis.__q47) return;
+  var d = globalThis.__q47 = { created: 0, removed: 0, ticks: 0 };
+  var tracked = {};   // id -> mesh(Group)
+  function refs() { return window.THREE && window.world && window.world.sceneOrigin; }
+  function buildMesh(T) {
+    var g = new T.Group();
+    var shaft = new T.Mesh(new T.BoxGeometry(0.05, 0.05, 0.55), new T.MeshBasicMaterial({ color: 0x9a7b4f }));
+    var tip = new T.Mesh(new T.ConeGeometry(0.055, 0.14, 8), new T.MeshBasicMaterial({ color: 0xd8d8d8 }));
+    tip.rotation.x = Math.PI / 2; tip.position.z = 0.34;
+    var fin1 = new T.Mesh(new T.BoxGeometry(0.02, 0.14, 0.1), new T.MeshBasicMaterial({ color: 0xe8e8e8 }));
+    fin1.position.z = -0.24;
+    var fin2 = fin1.clone(); fin2.rotation.z = Math.PI / 2;
+    g.add(shaft); g.add(tip); g.add(fin1); g.add(fin2);
+    return g;
+  }
+  function orient(m, e) {
+    var T = window.THREE;
+    var v = e.velocity, dx = 0, dy = 0, dz = 0, sp = 0;
+    if (v) { dx = v.x || 0; dy = v.y || 0; dz = v.z || 0; sp = Math.sqrt(dx * dx + dy * dy + dz * dz); }
+    if (sp > 0.01) {
+      var dir = new T.Vector3(dx / sp, dy / sp, dz / sp);
+      m.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), dir);
+    } else if (typeof e.pitch === 'number' && typeof e.yaw === 'number' && isFinite(e.pitch) && isFinite(e.yaw)) {
+      m.rotation.order = 'YXZ';
+      m.rotation.y = e.yaw; m.rotation.x = -e.pitch; m.rotation.z = 0;
+    }
+  }
+  setInterval(function () {
+    try {
+      var b = globalThis.bot; if (!b || !b.entities || !refs()) return;
+      var W = window.world, T = window.THREE, now = Date.now();
+      d.ticks++;
+      for (var id in b.entities) {
+        var e = b.entities[id];
+        if (!e || !e.name || !/arrow|trident/i.test(e.name) || !e.position) continue;
+        var m = tracked[id];
+        if (!m || !m.parent) {
+          m = buildMesh(T);
+          try { W.sceneOrigin.add(m); } catch (e2) { continue; }
+          tracked[id] = m; d.created++;
+        }
+        m.position.set(e.position.x, e.position.y, e.position.z);
+        orient(m, e);
+        m.userData.lastSeen = now;
+      }
+      for (var k in tracked) {
+        var o = tracked[k];
+        var alive = b.entities[k] && b.entities[k].position;
+        if (!alive || !o.parent || now - (o.userData.lastSeen || 0) > 5000) {
+          try { if (o.parent) W.sceneOrigin.remove(o); } catch (e3) {}
+          delete tracked[k]; d.removed++;
+        }
+      }
+    } catch (err) {}
+  }, 300);
+})();
+</script>
+<script>/* uib24 快刷: 去重版——每挖一块原来有 3 路重复调渲染器(挖掘直调+bundle自带回包+我们的回包钩子)=3 次全节网格重建排队,视觉落后 1-2s。现在 wrapper 去重(同 pos+stateId 800ms 内只重建一次)+回包延迟 Δ 测量 */
+(function(){ if(globalThis.__fastBlk) return; var d=globalThis.__fastBlk={dig:0,upd:0,dup:0,miss:0,last:0,digT:{},recent:{},recentSid:{}};
+  function wrapDedupe(w){
+    if(!w||w.__qDeduped) return w;
+    var orig=w.setBlockStateId.bind(w), last={};
+    w.setBlockStateId=function(p,sid,a){
+      try{ var k=p.x+','+p.y+','+p.z+'|'+sid, n=Date.now();
+        if(last[k]&&n-last[k]<800){ d.dup++; return; }
+        for(var kk in last){ if(n-last[kk]>2500) delete last[kk]; }
+        last[k]=n;
+      }catch(e){}
+      return orig(p,sid,a);
+    };
+    w.__qDeduped=1; return w;
+  }
+  function wr(){ try{ var r=window.appViewer&&window.appViewer.backend&&window.appViewer.backend.soundSystem&&window.appViewer.backend.soundSystem.worldRenderer; return (r&&r.setBlockStateId)?r:null; }catch(e){ return null; } }  /* uib28: 去重已移除——800ms 窗口会吞掉 bundle 自身的相邻面更新→遮挡区闪蓝+贴图迟滞；重复重建代价已小（专属 worker+单节重建） */
+  function mkV(p){ try{ var b=globalThis.bot; var C=b&&b.entity&&b.entity.position&&b.entity.position.constructor; if(C) return new C(p.x,p.y,p.z); }catch(e){} return p; }
+  window.__fastBlkDig=function(p){ try{ var w=wr(); if(w){ var k0=p.x+','+p.y+','+p.z,n0=Date.now();
+      if(d.recent[k0]&&n0-d.recent[k0]<150&&d.recentSid[k0]===0){ d.dup++; return; }
+      d.recent[k0]=n0; d.recentSid[k0]=0;
+      w.setBlockStateId(mkV(p),0); d.dig++; d.digT[p.x+','+p.y+','+p.z]=Date.now();
+      var n=Date.now(); if(n-d.last>400){ d.last=n; console.log("[fastdig] dig done -> renderer reset @",p.x,p.y,p.z); } }
+    else { d.miss++; console.log("[fastdig] renderer chain unavailable!"); } }catch(e){ console.log("[fastdig] dig exception",e&&e.message); } };
+  var t=setInterval(function(){ var b=globalThis.bot; if(!b||!b.world||!b.world.setBlockStateId) return; clearInterval(t);
+    try{ b.on("diggingCompleted", function(bl){ try{ if(!bl||!bl.position) return; window.__fastBlkDig(bl.position); }catch(e){} }); }catch(e){}
+    try{ b.on("blockUpdate", function(o,nw){ try{ var nb=(nw&&nw.position)?nw:o; if(!nb||!nb.position) return;
+      var sid=nb.stateId; if(sid===undefined||sid===null) return; var p=nb.position;
+      var k=p.x+','+p.y+','+p.z, t0=d.digT[k]; if(t0){ delete d.digT[k]; }
+      var w=wr(); if(w){ try{ var n2=Date.now();
+          if(d.recent[k]&&n2-d.recent[k]<150&&d.recentSid[k]===sid){ d.dup++; return; }
+          for(var kk in d.recent){ if(n2-d.recent[kk]>5000){ delete d.recent[kk]; delete d.recentSid[kk]; } }
+          d.recent[k]=n2; d.recentSid[k]=sid;
+          w.setBlockStateId(mkV(p),sid); d.upd++;
+          var n=Date.now(); if(n-d.last>400){ d.last=n; console.log("[fastdig] blockUpdate -> renderer @",p.x,p.y,p.z,"sid",sid, t0?("pkt delay "+(n-t0)+"ms"):""); } }catch(e3){} }
+        else { d.miss++; }
+    }catch(e){} }); }catch(e){}
+    console.log("[fastdig] uib30 mounted (local dig prediction + optimistic place) | counter __fastBlk");
+    /* uib30 乐观放置: block_place 发出即本地预测放置(参考块+direction偏移), 服务器回包自纠错。
+       放置原本无预测→等 RTT(v4 走 VPS 中转 100~600ms)才显示 */
+    try{
+      if(false&&!b.__optPlace){ /* 已禁用: 预测错位导致放置回退闪烁(uib30 遗留, VPS 中转时代产物) */
+        b.__optPlace=1;
+        var cw=b._client.write.bind(b._client);
+        var DIR=[[0,-1,0],[0,1,0],[0,0,-1],[0,0,1],[-1,0,0],[1,0,0]]; /* protocol dir: 0=-Y,1=+Y,2=-Z,3=+Z,4=-X,5=+X */
+        b._client.write=function(name,args){
+          try{
+            if(name==='block_place'&&args&&args.location&&args.direction!=null){
+              if(!d.hooked){ d.hooked=1; console.log("[fastdig] block_place hook triggered dir=",args.direction); }
+              var C=b.entity&&b.entity.position&&b.entity.position.constructor;
+              var o=DIR[args.direction]||[0,0,0];
+              var tp={x:args.location.x+o[0],y:args.location.y+o[1],z:args.location.z+o[2]};
+              try{ var rb=b.blockAt(new C(args.location.x,args.location.y,args.location.z)); if(rb&&rb.boundingBox==='empty') tp={x:args.location.x,y:args.location.y,z:args.location.z}; }catch(e2){}
+              var hi=b.heldItem||b.currentItem||(b.quick&&b.quick.barSlot)||(b.inventory&&b.inventory.heldItem)||null;
+              var bn=(hi&&b.registry&&b.registry.blocksByName)?b.registry.blocksByName[hi.name||hi.displayName]:null;
+              var sid=bn?bn.defaultState:null;
+              if(sid!=null){
+                var w=wr(); if(w) w.setBlockStateId(mkV(tp),sid);
+                try{ b.world.setBlockStateId(tp,sid); }catch(e3){}
+                d.place=(d.place||0)+1;
+                var n=Date.now(); if(n-d.last>400){ d.last=n; console.log("[fastdig] optimistic place @",tp.x,tp.y,tp.z,"sid",sid); }
+              } else {
+                d.skip=(d.skip||0)+1;
+                var n2=Date.now(); if(n2-d.last>400){ d.last=n2; console.log("[fastdig] optimistic place skipped: heldItem=",hi&&(hi.name||hi.displayName),"count",d.skip); }
+              }
+            }
+          }catch(e1){}
+          return cw(name,args);
+        };
+      }
+    }catch(e){ console.log("[fastdig] optimistic place mount failed",e&&e.message); }
+  },500); })();
+</script>
+<script>/* 音效注册表修正: 客户端 registry.sounds 为旧版顺序, Paper1.20.4 的数字 id 对不上 → 打人变羊驼叫。换 1.20.4 官方 id→name 表 */
+window.__SND1204=["entity.allay.ambient_with_item","entity.allay.ambient_without_item","entity.allay.death","entity.allay.hurt","entity.allay.item_given","entity.allay.item_taken","entity.allay.item_thrown","ambient.cave","ambient.basalt_deltas.additions","ambient.basalt_deltas.loop","ambient.basalt_deltas.mood","ambient.crimson_forest.additions","ambient.crimson_forest.loop","ambient.crimson_forest.mood","ambient.nether_wastes.additions","ambient.nether_wastes.loop","ambient.nether_wastes.mood","ambient.soul_sand_valley.additions","ambient.soul_sand_valley.loop","ambient.soul_sand_valley.mood","ambient.warped_forest.additions","ambient.warped_forest.loop","ambient.warped_forest.mood","ambient.underwater.enter","ambient.underwater.exit","ambient.underwater.loop","ambient.underwater.loop.additions","ambient.underwater.loop.additions.rare","ambient.underwater.loop.additions.ultra_rare","block.amethyst_block.break","block.amethyst_block.chime","block.amethyst_block.fall","block.amethyst_block.hit","block.amethyst_block.place","block.amethyst_block.resonate","block.amethyst_block.step","block.amethyst_cluster.break","block.amethyst_cluster.fall","block.amethyst_cluster.hit","block.amethyst_cluster.place","block.amethyst_cluster.step","block.ancient_debris.break","block.ancient_debris.step","block.ancient_debris.place","block.ancient_debris.hit","block.ancient_debris.fall","block.anvil.break","block.anvil.destroy","block.anvil.fall","block.anvil.hit","block.anvil.land","block.anvil.place","block.anvil.step","block.anvil.use","item.armor.equip_chain","item.armor.equip_diamond","item.armor.equip_elytra","item.armor.equip_generic","item.armor.equip_gold","item.armor.equip_iron","item.armor.equip_leather","item.armor.equip_netherite","item.armor.equip_turtle","entity.armor_stand.break","entity.armor_stand.fall","entity.armor_stand.hit","entity.armor_stand.place","entity.arrow.hit","entity.arrow.hit_player","entity.arrow.shoot","item.axe.strip","item.axe.scrape","item.axe.wax_off","entity.axolotl.attack","entity.axolotl.death","entity.axolotl.hurt","entity.axolotl.idle_air","entity.axolotl.idle_water","entity.axolotl.splash","entity.axolotl.swim","block.azalea.break","block.azalea.fall","block.azalea.hit","block.azalea.place","block.azalea.step","block.azalea_leaves.break","block.azalea_leaves.fall","block.azalea_leaves.hit","block.azalea_leaves.place","block.azalea_leaves.step","block.bamboo.break","block.bamboo.fall","block.bamboo.hit","block.bamboo.place","block.bamboo.step","block.bamboo_sapling.break","block.bamboo_sapling.hit","block.bamboo_sapling.place","block.bamboo_wood.break","block.bamboo_wood.fall","block.bamboo_wood.hit","block.bamboo_wood.place","block.bamboo_wood.step","block.bamboo_wood_door.close","block.bamboo_wood_door.open","block.bamboo_wood_trapdoor.close","block.bamboo_wood_trapdoor.open","block.bamboo_wood_button.click_off","block.bamboo_wood_button.click_on","block.bamboo_wood_pressure_plate.click_off","block.bamboo_wood_pressure_plate.click_on","block.bamboo_wood_fence_gate.close","block.bamboo_wood_fence_gate.open","block.barrel.close","block.barrel.open","block.basalt.break","block.basalt.step","block.basalt.place","block.basalt.hit","block.basalt.fall","entity.bat.ambient","entity.bat.death","entity.bat.hurt","entity.bat.loop","entity.bat.takeoff","block.beacon.activate","block.beacon.ambient","block.beacon.deactivate","block.beacon.power_select","entity.bee.death","entity.bee.hurt","entity.bee.loop_aggressive","entity.bee.loop","entity.bee.sting","entity.bee.pollinate","block.beehive.drip","block.beehive.enter","block.beehive.exit","block.beehive.shear","block.beehive.work","block.bell.use","block.bell.resonate","block.big_dripleaf.break","block.big_dripleaf.fall","block.big_dripleaf.hit","block.big_dripleaf.place","block.big_dripleaf.step","entity.blaze.ambient","entity.blaze.burn","entity.blaze.death","entity.blaze.hurt","entity.blaze.shoot","entity.boat.paddle_land","entity.boat.paddle_water","block.bone_block.break","block.bone_block.fall","block.bone_block.hit","block.bone_block.place","block.bone_block.step","item.bone_meal.use","item.book.page_turn","item.book.put","block.blastfurnace.fire_crackle","item.bottle.empty","item.bottle.fill","item.bottle.fill_dragonbreath","entity.breeze.inhale","entity.breeze.idle_ground","entity.breeze.idle_air","entity.breeze.shoot","entity.breeze.jump","entity.breeze.land","entity.breeze.slide","entity.breeze.death","entity.breeze.hurt","block.brewing_stand.brew","item.brush.brushing.generic","item.brush.brushing.sand","item.brush.brushing.gravel","item.brush.brushing.sand.complete","item.brush.brushing.gravel.complete","block.bubble_column.bubble_pop","block.bubble_column.upwards_ambient","block.bubble_column.upwards_inside","block.bubble_column.whirlpool_ambient","block.bubble_column.whirlpool_inside","item.bucket.empty","item.bucket.empty_axolotl","item.bucket.empty_fish","item.bucket.empty_lava","item.bucket.empty_powder_snow","item.bucket.empty_tadpole","item.bucket.fill","item.bucket.fill_axolotl","item.bucket.fill_fish","item.bucket.fill_lava","item.bucket.fill_powder_snow","item.bucket.fill_tadpole","item.bundle.drop_contents","item.bundle.insert","item.bundle.remove_one","block.cake.add_candle","block.calcite.break","block.calcite.step","block.calcite.place","block.calcite.hit","block.calcite.fall","entity.camel.ambient","entity.camel.dash","entity.camel.dash_ready","entity.camel.death","entity.camel.eat","entity.camel.hurt","entity.camel.saddle","entity.camel.sit","entity.camel.stand","entity.camel.step","entity.camel.step_sand","block.campfire.crackle","block.candle.ambient","block.candle.break","block.candle.extinguish","block.candle.fall","block.candle.hit","block.candle.place","block.candle.step","entity.cat.ambient","entity.cat.stray_ambient","entity.cat.death","entity.cat.eat","entity.cat.hiss","entity.cat.beg_for_food","entity.cat.hurt","entity.cat.purr","entity.cat.purreow","block.cave_vines.break","block.cave_vines.fall","block.cave_vines.hit","block.cave_vines.place","block.cave_vines.step","block.cave_vines.pick_berries","block.chain.break","block.chain.fall","block.chain.hit","block.chain.place","block.chain.step","block.cherry_wood.break","block.cherry_wood.fall","block.cherry_wood.hit","block.cherry_wood.place","block.cherry_wood.step","block.cherry_sapling.break","block.cherry_sapling.fall","block.cherry_sapling.hit","block.cherry_sapling.place","block.cherry_sapling.step","block.cherry_leaves.break","block.cherry_leaves.fall","block.cherry_leaves.hit","block.cherry_leaves.place","block.cherry_leaves.step","block.cherry_wood_hanging_sign.step","block.cherry_wood_hanging_sign.break","block.cherry_wood_hanging_sign.fall","block.cherry_wood_hanging_sign.hit","block.cherry_wood_hanging_sign.place","block.cherry_wood_door.close","block.cherry_wood_door.open","block.cherry_wood_trapdoor.close","block.cherry_wood_trapdoor.open","block.cherry_wood_button.click_off","block.cherry_wood_button.click_on","block.cherry_wood_pressure_plate.click_off","block.cherry_wood_pressure_plate.click_on","block.cherry_wood_fence_gate.close","block.cherry_wood_fence_gate.open","block.chest.close","block.chest.locked","block.chest.open","entity.chicken.ambient","entity.chicken.death","entity.chicken.egg","entity.chicken.hurt","entity.chicken.step","block.chiseled_bookshelf.break","block.chiseled_bookshelf.fall","block.chiseled_bookshelf.hit","block.chiseled_bookshelf.insert","block.chiseled_bookshelf.insert.enchanted","block.chiseled_bookshelf.step","block.chiseled_bookshelf.pickup","block.chiseled_bookshelf.pickup.enchanted","block.chiseled_bookshelf.place","block.chorus_flower.death","block.chorus_flower.grow","item.chorus_fruit.teleport","entity.cod.ambient","entity.cod.death","entity.cod.flop","entity.cod.hurt","block.comparator.click","block.composter.empty","block.composter.fill","block.composter.fill_success","block.composter.ready","block.conduit.activate","block.conduit.ambient","block.conduit.ambient.short","block.conduit.attack.target","block.conduit.deactivate","block.copper_bulb.break","block.copper_bulb.step","block.copper_bulb.place","block.copper_bulb.hit","block.copper_bulb.fall","block.copper_bulb.turn_on","block.copper_bulb.turn_off","block.copper.break","block.copper.step","block.copper.place","block.copper.hit","block.copper.fall","block.copper_door.close","block.copper_door.open","block.copper_grate.break","block.copper_grate.step","block.copper_grate.place","block.copper_grate.hit","block.copper_grate.fall","block.copper_trapdoor.close","block.copper_trapdoor.open","block.coral_block.break","block.coral_block.fall","block.coral_block.hit","block.coral_block.place","block.coral_block.step","entity.cow.ambient","entity.cow.death","entity.cow.hurt","entity.cow.milk","entity.cow.step","block.crafter.craft","block.crafter.fail","entity.creeper.death","entity.creeper.hurt","entity.creeper.primed","block.crop.break","item.crop.plant","item.crossbow.hit","item.crossbow.loading_end","item.crossbow.loading_middle","item.crossbow.loading_start","item.crossbow.quick_charge_1","item.crossbow.quick_charge_2","item.crossbow.quick_charge_3","item.crossbow.shoot","block.decorated_pot.break","block.decorated_pot.fall","block.decorated_pot.hit","block.decorated_pot.insert","block.decorated_pot.insert_fail","block.decorated_pot.step","block.decorated_pot.place","block.decorated_pot.shatter","block.deepslate_bricks.break","block.deepslate_bricks.fall","block.deepslate_bricks.hit","block.deepslate_bricks.place","block.deepslate_bricks.step","block.deepslate.break","block.deepslate.fall","block.deepslate.hit","block.deepslate.place","block.deepslate.step","block.deepslate_tiles.break","block.deepslate_tiles.fall","block.deepslate_tiles.hit","block.deepslate_tiles.place","block.deepslate_tiles.step","block.dispenser.dispense","block.dispenser.fail","block.dispenser.launch","entity.dolphin.ambient","entity.dolphin.ambient_water","entity.dolphin.attack","entity.dolphin.death","entity.dolphin.eat","entity.dolphin.hurt","entity.dolphin.jump","entity.dolphin.play","entity.dolphin.splash","entity.dolphin.swim","entity.donkey.ambient","entity.donkey.angry","entity.donkey.chest","entity.donkey.death","entity.donkey.eat","entity.donkey.hurt","block.dripstone_block.break","block.dripstone_block.step","block.dripstone_block.place","block.dripstone_block.hit","block.dripstone_block.fall","block.pointed_dripstone.break","block.pointed_dripstone.step","block.pointed_dripstone.place","block.pointed_dripstone.hit","block.pointed_dripstone.fall","block.pointed_dripstone.land","block.pointed_dripstone.drip_lava","block.pointed_dripstone.drip_water","block.pointed_dripstone.drip_lava_into_cauldron","block.pointed_dripstone.drip_water_into_cauldron","block.big_dripleaf.tilt_down","block.big_dripleaf.tilt_up","entity.drowned.ambient","entity.drowned.ambient_water","entity.drowned.death","entity.drowned.death_water","entity.drowned.hurt","entity.drowned.hurt_water","entity.drowned.shoot","entity.drowned.step","entity.drowned.swim","item.dye.use","entity.egg.throw","entity.elder_guardian.ambient","entity.elder_guardian.ambient_land","entity.elder_guardian.curse","entity.elder_guardian.death","entity.elder_guardian.death_land","entity.elder_guardian.flop","entity.elder_guardian.hurt","entity.elder_guardian.hurt_land","item.elytra.flying","block.enchantment_table.use","block.ender_chest.close","block.ender_chest.open","entity.ender_dragon.ambient","entity.ender_dragon.death","entity.dragon_fireball.explode","entity.ender_dragon.flap","entity.ender_dragon.growl","entity.ender_dragon.hurt","entity.ender_dragon.shoot","entity.ender_eye.death","entity.ender_eye.launch","entity.enderman.ambient","entity.enderman.death","entity.enderman.hurt","entity.enderman.scream","entity.enderman.stare","entity.enderman.teleport","entity.endermite.ambient","entity.endermite.death","entity.endermite.hurt","entity.endermite.step","entity.ender_pearl.throw","block.end_gateway.spawn","block.end_portal_frame.fill","block.end_portal.spawn","entity.evoker.ambient","entity.evoker.cast_spell","entity.evoker.celebrate","entity.evoker.death","entity.evoker_fangs.attack","entity.evoker.hurt","entity.evoker.prepare_attack","entity.evoker.prepare_summon","entity.evoker.prepare_wololo","entity.experience_bottle.throw","entity.experience_orb.pickup","block.fence_gate.close","block.fence_gate.open","item.firecharge.use","entity.firework_rocket.blast","entity.firework_rocket.blast_far","entity.firework_rocket.large_blast","entity.firework_rocket.large_blast_far","entity.firework_rocket.launch","entity.firework_rocket.shoot","entity.firework_rocket.twinkle","entity.firework_rocket.twinkle_far","block.fire.ambient","block.fire.extinguish","entity.fish.swim","entity.fishing_bobber.retrieve","entity.fishing_bobber.splash","entity.fishing_bobber.throw","item.flintandsteel.use","block.flowering_azalea.break","block.flowering_azalea.fall","block.flowering_azalea.hit","block.flowering_azalea.place","block.flowering_azalea.step","entity.fox.aggro","entity.fox.ambient","entity.fox.bite","entity.fox.death","entity.fox.eat","entity.fox.hurt","entity.fox.screech","entity.fox.sleep","entity.fox.sniff","entity.fox.spit","entity.fox.teleport","block.suspicious_sand.break","block.suspicious_sand.step","block.suspicious_sand.place","block.suspicious_sand.hit","block.suspicious_sand.fall","block.suspicious_gravel.break","block.suspicious_gravel.step","block.suspicious_gravel.place","block.suspicious_gravel.hit","block.suspicious_gravel.fall","block.froglight.break","block.froglight.fall","block.froglight.hit","block.froglight.place","block.froglight.step","block.frogspawn.step","block.frogspawn.break","block.frogspawn.fall","block.frogspawn.hatch","block.frogspawn.hit","block.frogspawn.place","entity.frog.ambient","entity.frog.death","entity.frog.eat","entity.frog.hurt","entity.frog.lay_spawn","entity.frog.long_jump","entity.frog.step","entity.frog.tongue","block.roots.break","block.roots.step","block.roots.place","block.roots.hit","block.roots.fall","block.furnace.fire_crackle","entity.generic.big_fall","entity.generic.burn","entity.generic.death","entity.generic.drink","entity.generic.eat","entity.generic.explode","entity.generic.extinguish_fire","entity.generic.hurt","entity.generic.small_fall","entity.generic.splash","entity.generic.swim","entity.ghast.ambient","entity.ghast.death","entity.ghast.hurt","entity.ghast.scream","entity.ghast.shoot","entity.ghast.warn","block.gilded_blackstone.break","block.gilded_blackstone.fall","block.gilded_blackstone.hit","block.gilded_blackstone.place","block.gilded_blackstone.step","block.glass.break","block.glass.fall","block.glass.hit","block.glass.place","block.glass.step","item.glow_ink_sac.use","entity.glow_item_frame.add_item","entity.glow_item_frame.break","entity.glow_item_frame.place","entity.glow_item_frame.remove_item","entity.glow_item_frame.rotate_item","entity.glow_squid.ambient","entity.glow_squid.death","entity.glow_squid.hurt","entity.glow_squid.squirt","entity.goat.ambient","entity.goat.death","entity.goat.eat","entity.goat.hurt","entity.goat.long_jump","entity.goat.milk","entity.goat.prepare_ram","entity.goat.ram_impact","entity.goat.horn_break","item.goat_horn.play","entity.goat.screaming.ambient","entity.goat.screaming.death","entity.goat.screaming.eat","entity.goat.screaming.hurt","entity.goat.screaming.long_jump","entity.goat.screaming.milk","entity.goat.screaming.prepare_ram","entity.goat.screaming.ram_impact","entity.goat.screaming.horn_break","entity.goat.step","block.grass.break","block.grass.fall","block.grass.hit","block.grass.place","block.grass.step","block.gravel.break","block.gravel.fall","block.gravel.hit","block.gravel.place","block.gravel.step","block.grindstone.use","block.growing_plant.crop","entity.guardian.ambient","entity.guardian.ambient_land","entity.guardian.attack","entity.guardian.death","entity.guardian.death_land","entity.guardian.flop","entity.guardian.hurt","entity.guardian.hurt_land","block.hanging_roots.break","block.hanging_roots.fall","block.hanging_roots.hit","block.hanging_roots.place","block.hanging_roots.step","block.hanging_sign.step","block.hanging_sign.break","block.hanging_sign.fall","block.hanging_sign.hit","block.hanging_sign.place","block.nether_wood_hanging_sign.step","block.nether_wood_hanging_sign.break","block.nether_wood_hanging_sign.fall","block.nether_wood_hanging_sign.hit","block.nether_wood_hanging_sign.place","block.bamboo_wood_hanging_sign.step","block.bamboo_wood_hanging_sign.break","block.bamboo_wood_hanging_sign.fall","block.bamboo_wood_hanging_sign.hit","block.bamboo_wood_hanging_sign.place","block.trial_spawner.break","block.trial_spawner.step","block.trial_spawner.place","block.trial_spawner.hit","block.trial_spawner.fall","block.trial_spawner.spawn_mob","block.trial_spawner.detect_player","block.trial_spawner.ambient","block.trial_spawner.open_shutter","block.trial_spawner.close_shutter","block.trial_spawner.eject_item","item.hoe.till","entity.hoglin.ambient","entity.hoglin.angry","entity.hoglin.attack","entity.hoglin.converted_to_zombified","entity.hoglin.death","entity.hoglin.hurt","entity.hoglin.retreat","entity.hoglin.step","block.honey_block.break","block.honey_block.fall","block.honey_block.hit","block.honey_block.place","block.honey_block.slide","block.honey_block.step","item.honeycomb.wax_on","item.honey_bottle.drink","item.goat_horn.sound.0","item.goat_horn.sound.1","item.goat_horn.sound.2","item.goat_horn.sound.3","item.goat_horn.sound.4","item.goat_horn.sound.5","item.goat_horn.sound.6","item.goat_horn.sound.7","entity.horse.ambient","entity.horse.angry","entity.horse.armor","entity.horse.breathe","entity.horse.death","entity.horse.eat","entity.horse.gallop","entity.horse.hurt","entity.horse.jump","entity.horse.land","entity.horse.saddle","entity.horse.step","entity.horse.step_wood","entity.hostile.big_fall","entity.hostile.death","entity.hostile.hurt","entity.hostile.small_fall","entity.hostile.splash","entity.hostile.swim","entity.husk.ambient","entity.husk.converted_to_zombie","entity.husk.death","entity.husk.hurt","entity.husk.step","entity.illusioner.ambient","entity.illusioner.cast_spell","entity.illusioner.death","entity.illusioner.hurt","entity.illusioner.mirror_move","entity.illusioner.prepare_blindness","entity.illusioner.prepare_mirror","item.ink_sac.use","block.iron_door.close","block.iron_door.open","entity.iron_golem.attack","entity.iron_golem.damage","entity.iron_golem.death","entity.iron_golem.hurt","entity.iron_golem.repair","entity.iron_golem.step","block.iron_trapdoor.close","block.iron_trapdoor.open","entity.item_frame.add_item","entity.item_frame.break","entity.item_frame.place","entity.item_frame.remove_item","entity.item_frame.rotate_item","entity.item.break","entity.item.pickup","block.ladder.break","block.ladder.fall","block.ladder.hit","block.ladder.place","block.ladder.step","block.lantern.break","block.lantern.fall","block.lantern.hit","block.lantern.place","block.lantern.step","block.large_amethyst_bud.break","block.large_amethyst_bud.place","block.lava.ambient","block.lava.extinguish","block.lava.pop","entity.leash_knot.break","entity.leash_knot.place","block.lever.click","entity.lightning_bolt.impact","entity.lightning_bolt.thunder","entity.lingering_potion.throw","entity.llama.ambient","entity.llama.angry","entity.llama.chest","entity.llama.death","entity.llama.eat","entity.llama.hurt","entity.llama.spit","entity.llama.step","entity.llama.swag","entity.magma_cube.death_small","block.lodestone.break","block.lodestone.step","block.lodestone.place","block.lodestone.hit","block.lodestone.fall","item.lodestone_compass.lock","entity.magma_cube.death","entity.magma_cube.hurt","entity.magma_cube.hurt_small","entity.magma_cube.jump","entity.magma_cube.squish","entity.magma_cube.squish_small","block.mangrove_roots.break","block.mangrove_roots.fall","block.mangrove_roots.hit","block.mangrove_roots.place","block.mangrove_roots.step","block.medium_amethyst_bud.break","block.medium_amethyst_bud.place","block.metal.break","block.metal.fall","block.metal.hit","block.metal.place","block.metal_pressure_plate.click_off","block.metal_pressure_plate.click_on","block.metal.step","entity.minecart.inside.underwater","entity.minecart.inside","entity.minecart.riding","entity.mooshroom.convert","entity.mooshroom.eat","entity.mooshroom.milk","entity.mooshroom.suspicious_milk","entity.mooshroom.shear","block.moss_carpet.break","block.moss_carpet.fall","block.moss_carpet.hit","block.moss_carpet.place","block.moss_carpet.step","block.pink_petals.break","block.pink_petals.fall","block.pink_petals.hit","block.pink_petals.place","block.pink_petals.step","block.moss.break","block.moss.fall","block.moss.hit","block.moss.place","block.moss.step","block.mud.break","block.mud.fall","block.mud.hit","block.mud.place","block.mud.step","block.mud_bricks.break","block.mud_bricks.fall","block.mud_bricks.hit","block.mud_bricks.place","block.mud_bricks.step","block.muddy_mangrove_roots.break","block.muddy_mangrove_roots.fall","block.muddy_mangrove_roots.hit","block.muddy_mangrove_roots.place","block.muddy_mangrove_roots.step","entity.mule.ambient","entity.mule.angry","entity.mule.chest","entity.mule.death","entity.mule.eat","entity.mule.hurt","music.creative","music.credits","music_disc.5","music_disc.11","music_disc.13","music_disc.blocks","music_disc.cat","music_disc.chirp","music_disc.far","music_disc.mall","music_disc.mellohi","music_disc.pigstep","music_disc.stal","music_disc.strad","music_disc.wait","music_disc.ward","music_disc.otherside","music_disc.relic","music.dragon","music.end","music.game","music.menu","music.nether.basalt_deltas","music.nether.crimson_forest","music.overworld.deep_dark","music.overworld.dripstone_caves","music.overworld.grove","music.overworld.jagged_peaks","music.overworld.lush_caves","music.overworld.swamp","music.overworld.forest","music.overworld.old_growth_taiga","music.overworld.meadow","music.overworld.cherry_grove","music.nether.nether_wastes","music.overworld.frozen_peaks","music.overworld.snowy_slopes","music.nether.soul_sand_valley","music.overworld.stony_peaks","music.nether.warped_forest","music.overworld.flower_forest","music.overworld.desert","music.overworld.badlands","music.overworld.jungle","music.overworld.sparse_jungle","music.overworld.bamboo_jungle","music.under_water","block.nether_bricks.break","block.nether_bricks.step","block.nether_bricks.place","block.nether_bricks.hit","block.nether_bricks.fall","block.nether_wart.break","item.nether_wart.plant","block.nether_wood.break","block.nether_wood.fall","block.nether_wood.hit","block.nether_wood.place","block.nether_wood.step","block.nether_wood_door.close","block.nether_wood_door.open","block.nether_wood_trapdoor.close","block.nether_wood_trapdoor.open","block.nether_wood_button.click_off","block.nether_wood_button.click_on","block.nether_wood_pressure_plate.click_off","block.nether_wood_pressure_plate.click_on","block.nether_wood_fence_gate.close","block.nether_wood_fence_gate.open","intentionally_empty","block.packed_mud.break","block.packed_mud.fall","block.packed_mud.hit","block.packed_mud.place","block.packed_mud.step","block.stem.break","block.stem.step","block.stem.place","block.stem.hit","block.stem.fall","block.nylium.break","block.nylium.step","block.nylium.place","block.nylium.hit","block.nylium.fall","block.nether_sprouts.break","block.nether_sprouts.step","block.nether_sprouts.place","block.nether_sprouts.hit","block.nether_sprouts.fall","block.fungus.break","block.fungus.step","block.fungus.place","block.fungus.hit","block.fungus.fall","block.weeping_vines.break","block.weeping_vines.step","block.weeping_vines.place","block.weeping_vines.hit","block.weeping_vines.fall","block.wart_block.break","block.wart_block.step","block.wart_block.place","block.wart_block.hit","block.wart_block.fall","block.netherite_block.break","block.netherite_block.step","block.netherite_block.place","block.netherite_block.hit","block.netherite_block.fall","block.netherrack.break","block.netherrack.step","block.netherrack.place","block.netherrack.hit","block.netherrack.fall","block.note_block.basedrum","block.note_block.bass","block.note_block.bell","block.note_block.chime","block.note_block.flute","block.note_block.guitar","block.note_block.harp","block.note_block.hat","block.note_block.pling","block.note_block.snare","block.note_block.xylophone","block.note_block.iron_xylophone","block.note_block.cow_bell","block.note_block.didgeridoo","block.note_block.bit","block.note_block.banjo","block.note_block.imitate.zombie","block.note_block.imitate.skeleton","block.note_block.imitate.creeper","block.note_block.imitate.ender_dragon","block.note_block.imitate.wither_skeleton","block.note_block.imitate.piglin","entity.ocelot.hurt","entity.ocelot.ambient","entity.ocelot.death","entity.painting.break","entity.painting.place","entity.panda.pre_sneeze","entity.panda.sneeze","entity.panda.ambient","entity.panda.death","entity.panda.eat","entity.panda.step","entity.panda.cant_breed","entity.panda.aggressive_ambient","entity.panda.worried_ambient","entity.panda.hurt","entity.panda.bite","entity.parrot.ambient","entity.parrot.death","entity.parrot.eat","entity.parrot.fly","entity.parrot.hurt","entity.parrot.imitate.blaze","entity.parrot.imitate.breeze","entity.parrot.imitate.creeper","entity.parrot.imitate.drowned","entity.parrot.imitate.elder_guardian","entity.parrot.imitate.ender_dragon","entity.parrot.imitate.endermite","entity.parrot.imitate.evoker","entity.parrot.imitate.ghast","entity.parrot.imitate.guardian","entity.parrot.imitate.hoglin","entity.parrot.imitate.husk","entity.parrot.imitate.illusioner","entity.parrot.imitate.magma_cube","entity.parrot.imitate.phantom","entity.parrot.imitate.piglin","entity.parrot.imitate.piglin_brute","entity.parrot.imitate.pillager","entity.parrot.imitate.ravager","entity.parrot.imitate.shulker","entity.parrot.imitate.silverfish","entity.parrot.imitate.skeleton","entity.parrot.imitate.slime","entity.parrot.imitate.spider","entity.parrot.imitate.stray","entity.parrot.imitate.vex","entity.parrot.imitate.vindicator","entity.parrot.imitate.warden","entity.parrot.imitate.witch","entity.parrot.imitate.wither","entity.parrot.imitate.wither_skeleton","entity.parrot.imitate.zoglin","entity.parrot.imitate.zombie","entity.parrot.imitate.zombie_villager","entity.parrot.step","entity.phantom.ambient","entity.phantom.bite","entity.phantom.death","entity.phantom.flap","entity.phantom.hurt","entity.phantom.swoop","entity.pig.ambient","entity.pig.death","entity.pig.hurt","entity.pig.saddle","entity.pig.step","entity.piglin.admiring_item","entity.piglin.ambient","entity.piglin.angry","entity.piglin.celebrate","entity.piglin.death","entity.piglin.jealous","entity.piglin.hurt","entity.piglin.retreat","entity.piglin.step","entity.piglin.converted_to_zombified","entity.piglin_brute.ambient","entity.piglin_brute.angry","entity.piglin_brute.death","entity.piglin_brute.hurt","entity.piglin_brute.step","entity.piglin_brute.converted_to_zombified","entity.pillager.ambient","entity.pillager.celebrate","entity.pillager.death","entity.pillager.hurt","block.piston.contract","block.piston.extend","entity.player.attack.crit","entity.player.attack.knockback","entity.player.attack.nodamage","entity.player.attack.strong","entity.player.attack.sweep","entity.player.attack.weak","entity.player.big_fall","entity.player.breath","entity.player.burp","entity.player.death","entity.player.hurt","entity.player.hurt_drown","entity.player.hurt_freeze","entity.player.hurt_on_fire","entity.player.hurt_sweet_berry_bush","entity.player.levelup","entity.player.small_fall","entity.player.splash","entity.player.splash.high_speed","entity.player.swim","entity.player.teleport","entity.polar_bear.ambient","entity.polar_bear.ambient_baby","entity.polar_bear.death","entity.polar_bear.hurt","entity.polar_bear.step","entity.polar_bear.warning","block.polished_deepslate.break","block.polished_deepslate.fall","block.polished_deepslate.hit","block.polished_deepslate.place","block.polished_deepslate.step","block.portal.ambient","block.portal.travel","block.portal.trigger","block.powder_snow.break","block.powder_snow.fall","block.powder_snow.hit","block.powder_snow.place","block.powder_snow.step","entity.puffer_fish.ambient","entity.puffer_fish.blow_out","entity.puffer_fish.blow_up","entity.puffer_fish.death","entity.puffer_fish.flop","entity.puffer_fish.hurt","entity.puffer_fish.sting","block.pumpkin.carve","entity.rabbit.ambient","entity.rabbit.attack","entity.rabbit.death","entity.rabbit.hurt","entity.rabbit.jump","event.raid.horn","entity.ravager.ambient","entity.ravager.attack","entity.ravager.celebrate","entity.ravager.death","entity.ravager.hurt","entity.ravager.step","entity.ravager.stunned","entity.ravager.roar","block.nether_gold_ore.break","block.nether_gold_ore.fall","block.nether_gold_ore.hit","block.nether_gold_ore.place","block.nether_gold_ore.step","block.nether_ore.break","block.nether_ore.fall","block.nether_ore.hit","block.nether_ore.place","block.nether_ore.step","block.redstone_torch.burnout","block.respawn_anchor.ambient","block.respawn_anchor.charge","block.respawn_anchor.deplete","block.respawn_anchor.set_spawn","block.rooted_dirt.break","block.rooted_dirt.fall","block.rooted_dirt.hit","block.rooted_dirt.place","block.rooted_dirt.step","entity.salmon.ambient","entity.salmon.death","entity.salmon.flop","entity.salmon.hurt","block.sand.break","block.sand.fall","block.sand.hit","block.sand.place","block.sand.step","block.scaffolding.break","block.scaffolding.fall","block.scaffolding.hit","block.scaffolding.place","block.scaffolding.step","block.sculk.spread","block.sculk.charge","block.sculk.break","block.sculk.fall","block.sculk.hit","block.sculk.place","block.sculk.step","block.sculk_catalyst.bloom","block.sculk_catalyst.break","block.sculk_catalyst.fall","block.sculk_catalyst.hit","block.sculk_catalyst.place","block.sculk_catalyst.step","block.sculk_sensor.clicking","block.sculk_sensor.clicking_stop","block.sculk_sensor.break","block.sculk_sensor.fall","block.sculk_sensor.hit","block.sculk_sensor.place","block.sculk_sensor.step","block.sculk_shrieker.break","block.sculk_shrieker.fall","block.sculk_shrieker.hit","block.sculk_shrieker.place","block.sculk_shrieker.shriek","block.sculk_shrieker.step","block.sculk_vein.break","block.sculk_vein.fall","block.sculk_vein.hit","block.sculk_vein.place","block.sculk_vein.step","entity.sheep.ambient","entity.sheep.death","entity.sheep.hurt","entity.sheep.shear","entity.sheep.step","item.shield.block","item.shield.break","block.shroomlight.break","block.shroomlight.step","block.shroomlight.place","block.shroomlight.hit","block.shroomlight.fall","item.shovel.flatten","entity.shulker.ambient","block.shulker_box.close","block.shulker_box.open","entity.shulker_bullet.hit","entity.shulker_bullet.hurt","entity.shulker.close","entity.shulker.death","entity.shulker.hurt","entity.shulker.hurt_closed","entity.shulker.open","entity.shulker.shoot","entity.shulker.teleport","entity.silverfish.ambient","entity.silverfish.death","entity.silverfish.hurt","entity.silverfish.step","entity.skeleton.ambient","entity.skeleton.converted_to_stray","entity.skeleton.death","entity.skeleton_horse.ambient","entity.skeleton_horse.death","entity.skeleton_horse.hurt","entity.skeleton_horse.swim","entity.skeleton_horse.ambient_water","entity.skeleton_horse.gallop_water","entity.skeleton_horse.jump_water","entity.skeleton_horse.step_water","entity.skeleton.hurt","entity.skeleton.shoot","entity.skeleton.step","entity.slime.attack","entity.slime.death","entity.slime.hurt","entity.slime.jump","entity.slime.squish","block.slime_block.break","block.slime_block.fall","block.slime_block.hit","block.slime_block.place","block.slime_block.step","block.small_amethyst_bud.break","block.small_amethyst_bud.place","block.small_dripleaf.break","block.small_dripleaf.fall","block.small_dripleaf.hit","block.small_dripleaf.place","block.small_dripleaf.step","block.soul_sand.break","block.soul_sand.step","block.soul_sand.place","block.soul_sand.hit","block.soul_sand.fall","block.soul_soil.break","block.soul_soil.step","block.soul_soil.place","block.soul_soil.hit","block.soul_soil.fall","particle.soul_escape","block.spore_blossom.break","block.spore_blossom.fall","block.spore_blossom.hit","block.spore_blossom.place","block.spore_blossom.step","entity.strider.ambient","entity.strider.happy","entity.strider.retreat","entity.strider.death","entity.strider.hurt","entity.strider.step","entity.strider.step_lava","entity.strider.eat","entity.strider.saddle","entity.slime.death_small","entity.slime.hurt_small","entity.slime.jump_small","entity.slime.squish_small","block.smithing_table.use","block.smoker.smoke","entity.sniffer.step","entity.sniffer.eat","entity.sniffer.idle","entity.sniffer.hurt","entity.sniffer.death","entity.sniffer.drop_seed","entity.sniffer.scenting","entity.sniffer.sniffing","entity.sniffer.searching","entity.sniffer.digging","entity.sniffer.digging_stop","entity.sniffer.happy","block.sniffer_egg.plop","block.sniffer_egg.crack","block.sniffer_egg.hatch","entity.snowball.throw","block.snow.break","block.snow.fall","entity.snow_golem.ambient","entity.snow_golem.death","entity.snow_golem.hurt","entity.snow_golem.shoot","entity.snow_golem.shear","block.snow.hit","block.snow.place","block.snow.step","entity.spider.ambient","entity.spider.death","entity.spider.hurt","entity.spider.step","entity.splash_potion.break","entity.splash_potion.throw","block.sponge.break","block.sponge.fall","block.sponge.hit","block.sponge.place","block.sponge.step","block.sponge.absorb","item.spyglass.use","item.spyglass.stop_using","entity.squid.ambient","entity.squid.death","entity.squid.hurt","entity.squid.squirt","block.stone.break","block.stone_button.click_off","block.stone_button.click_on","block.stone.fall","block.stone.hit","block.stone.place","block.stone_pressure_plate.click_off","block.stone_pressure_plate.click_on","block.stone.step","entity.stray.ambient","entity.stray.death","entity.stray.hurt","entity.stray.step","block.sweet_berry_bush.break","block.sweet_berry_bush.place","block.sweet_berry_bush.pick_berries","entity.tadpole.death","entity.tadpole.flop","entity.tadpole.grow_up","entity.tadpole.hurt","enchant.thorns.hit","entity.tnt.primed","item.totem.use","item.trident.hit","item.trident.hit_ground","item.trident.return","item.trident.riptide_1","item.trident.riptide_2","item.trident.riptide_3","item.trident.throw","item.trident.thunder","block.tripwire.attach","block.tripwire.click_off","block.tripwire.click_on","block.tripwire.detach","entity.tropical_fish.ambient","entity.tropical_fish.death","entity.tropical_fish.flop","entity.tropical_fish.hurt","block.tuff.break","block.tuff.step","block.tuff.place","block.tuff.hit","block.tuff.fall","block.tuff_bricks.break","block.tuff_bricks.fall","block.tuff_bricks.hit","block.tuff_bricks.place","block.tuff_bricks.step","block.polished_tuff.break","block.polished_tuff.fall","block.polished_tuff.hit","block.polished_tuff.place","block.polished_tuff.step","entity.turtle.ambient_land","entity.turtle.death","entity.turtle.death_baby","entity.turtle.egg_break","entity.turtle.egg_crack","entity.turtle.egg_hatch","entity.turtle.hurt","entity.turtle.hurt_baby","entity.turtle.lay_egg","entity.turtle.shamble","entity.turtle.shamble_baby","entity.turtle.swim","ui.button.click","ui.loom.select_pattern","ui.loom.take_result","ui.cartography_table.take_result","ui.stonecutter.take_result","ui.stonecutter.select_recipe","ui.toast.challenge_complete","ui.toast.in","ui.toast.out","entity.vex.ambient","entity.vex.charge","entity.vex.death","entity.vex.hurt","entity.villager.ambient","entity.villager.celebrate","entity.villager.death","entity.villager.hurt","entity.villager.no","entity.villager.trade","entity.villager.yes","entity.villager.work_armorer","entity.villager.work_butcher","entity.villager.work_cartographer","entity.villager.work_cleric","entity.villager.work_farmer","entity.villager.work_fisherman","entity.villager.work_fletcher","entity.villager.work_leatherworker","entity.villager.work_librarian","entity.villager.work_mason","entity.villager.work_shepherd","entity.villager.work_toolsmith","entity.villager.work_weaponsmith","entity.vindicator.ambient","entity.vindicator.celebrate","entity.vindicator.death","entity.vindicator.hurt","block.vine.break","block.vine.fall","block.vine.hit","block.vine.place","block.vine.step","block.lily_pad.place","entity.wandering_trader.ambient","entity.wandering_trader.death","entity.wandering_trader.disappeared","entity.wandering_trader.drink_milk","entity.wandering_trader.drink_potion","entity.wandering_trader.hurt","entity.wandering_trader.no","entity.wandering_trader.reappeared","entity.wandering_trader.trade","entity.wandering_trader.yes","entity.warden.agitated","entity.warden.ambient","entity.warden.angry","entity.warden.attack_impact","entity.warden.death","entity.warden.dig","entity.warden.emerge","entity.warden.heartbeat","entity.warden.hurt","entity.warden.listening","entity.warden.listening_angry","entity.warden.nearby_close","entity.warden.nearby_closer","entity.warden.nearby_closest","entity.warden.roar","entity.warden.sniff","entity.warden.sonic_boom","entity.warden.sonic_charge","entity.warden.step","entity.warden.tendril_clicks","block.hanging_sign.waxed_interact_fail","block.sign.waxed_interact_fail","block.water.ambient","weather.rain","weather.rain.above","block.wet_grass.break","block.wet_grass.fall","block.wet_grass.hit","block.wet_grass.place","block.wet_grass.step","block.wet_sponge.break","block.wet_sponge.fall","block.wet_sponge.hit","block.wet_sponge.place","block.wet_sponge.step","entity.generic.wind_burst","entity.witch.ambient","entity.witch.celebrate","entity.witch.death","entity.witch.drink","entity.witch.hurt","entity.witch.throw","entity.wither.ambient","entity.wither.break_block","entity.wither.death","entity.wither.hurt","entity.wither.shoot","entity.wither_skeleton.ambient","entity.wither_skeleton.death","entity.wither_skeleton.hurt","entity.wither_skeleton.step","entity.wither.spawn","entity.wolf.ambient","entity.wolf.death","entity.wolf.growl","entity.wolf.howl","entity.wolf.hurt","entity.wolf.pant","entity.wolf.shake","entity.wolf.step","entity.wolf.whine","block.wooden_door.close","block.wooden_door.open","block.wooden_trapdoor.close","block.wooden_trapdoor.open","block.wooden_button.click_off","block.wooden_button.click_on","block.wooden_pressure_plate.click_off","block.wooden_pressure_plate.click_on","block.wood.break","block.wood.fall","block.wood.hit","block.wood.place","block.wood.step","block.wool.break","block.wool.fall","block.wool.hit","block.wool.place","block.wool.step","entity.zoglin.ambient","entity.zoglin.angry","entity.zoglin.attack","entity.zoglin.death","entity.zoglin.hurt","entity.zoglin.step","entity.zombie.ambient","entity.zombie.attack_wooden_door","entity.zombie.attack_iron_door","entity.zombie.break_wooden_door","entity.zombie.converted_to_drowned","entity.zombie.death","entity.zombie.destroy_egg","entity.zombie_horse.ambient","entity.zombie_horse.death","entity.zombie_horse.hurt","entity.zombie.hurt","entity.zombie.infect","entity.zombified_piglin.ambient","entity.zombified_piglin.angry","entity.zombified_piglin.death","entity.zombified_piglin.hurt","entity.zombie.step","entity.zombie_villager.ambient","entity.zombie_villager.converted","entity.zombie_villager.cure","entity.zombie_villager.death","entity.zombie_villager.hurt","entity.zombie_villager.step"];
+(function(){var t=setInterval(function(){var b=globalThis.bot;if(!b||!b.registry)return;try{var a=b.registry.sounds||(b.registry.sounds={});a.length=0;for(var i=0;i<window.__SND1204.length;i++)a[i]={name:window.__SND1204[i]};console.log("[sound] registry.sounds -> 1.20.4 table "+window.__SND1204.length+" entries");}catch(e){}clearInterval(t);},500);})();</script>
+<script type="module" src="./static/js/webmc_voice.js?v=v7sync1"></script>
+<script>
+/* q-anim v11：bundle 渲染后驱动 + 动画让位 + 原版幅度（2026-10-25）
+   v8 三病因（_diag5/_diag6 实测）：
+   ① v8 的 rAF 早于 bundle 渲染循环注册 → 每帧先写后被 bundle 动画覆盖
+      （实证：僵尸静止 vel=0.04，rightArm 却达 -0.255rad——bundle 攻击动画穿透）；
+   ② capture 时机可能踩中 spawn/攻击帧 → rx 基准污染；
+   ③ head 点头 + body 上下起伏 = Alec 所说"抽搐/脱离"观感来源。
+   v9：
+   - 挂 scene.onAfterRender（链式保留原回调）= bundle render 之后 = 最终写权；
+   - 每骨让位检测：|cur - lastWrite| > 0.03 → bundle 正在动该骨 → 本帧不写，
+     rx 同步为 cur；bundle 动画停下复位后 rx 自动回 default；
+   - 只写 rotation.x，绝不碰 position（v6 骨头脱离教训）；删除 head/body 附加动作；
+   - 幅度原版化：行走 腿±0.5/臂±0.42，奔跑(mv>0.55)×1.9，四足 leg 对角±0.45；
+   - idle(mv≤0.02) 只写 rx 归位（严格 default 姿势，无微抽）；
+   - 拉弓：持弓臂 -1.5rad（+z 前向=负值前摆，_hum4 实证），平滑过渡。 */
+(function(){
+  var W = window;
+  function emTable(){
+    try{
+      var w = W.world;
+      if (w && w.entities && w.entities.entities) return w.entities.entities;
+      if (W.__wb && W.__wb.entities && W.__wb.entities.entities) return W.__wb.entities.entities;
+      if (W.entities && W.entities.entities) return W.entities.entities;
+    }catch(e){}
+    return null;
+  }
+  var DEFS = new WeakMap(); // wrapper -> {legs,arms,last,ph,bowK,bowT,bow,holdArm,hum}
+  var ready = false, frames = 0, mobs = 0, err = 0;
+  W.__qAnim = {v:11, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, yield:0, err:0};
+
+  function findBones(w){
+    var legs = [], arms = [], holdArm = null;
+    w.traverse(function(o){
+      if (!o.name || o.name.indexOf('bone_') !== 0) return;
+      var n = o.name.slice(5);
+      if (/^leg\d$/.test(n)) legs.push({b:o, n:n});
+      else if (n === 'leftLeg' || n === 'rightLeg') legs.push({b:o, n:n});
+      else if (n === 'leftArm' || n === 'rightArm') arms.push({b:o, n:n});
+      else if (n === 'leftItem' || n === 'rightItem'){
+        var has = false;
+        o.traverse(function(c){ if (c.name && c.name.indexOf('custom_item') === 0) has = true; });
+        if (has) holdArm = (n === 'leftItem' ? 'leftArm' : 'rightArm');
+      }
+    });
+    return {legs:legs, arms:arms, holdArm:holdArm};
+  }
+  function capture(d, g){
+    d.legs = g.legs.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, lw:l.b.rotation.x}; });
+    d.arms = g.arms.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, lw:l.b.rotation.x}; });
+    d.holdArm = g.holdArm;
+    d.hum = g.arms.length > 0;
+  }
+  function hasBow(oe){
+    try{
+      var eq = oe.equipment;
+      if (eq && eq[0] && eq[0].name && /bow/i.test(eq[0].name)) return true;
+      var h = oe.heldItem;
+      if (h && h.name && /bow/i.test(h.name)) return true;
+    }catch(e){}
+    return false;
+  }
+  function clamp(v, base){ return v > base + 1.3 ? base + 1.3 : (v < base - 1.3 ? base - 1.3 : v); }
+  function tick(){
+    frames++;
+    try{
+      var T = emTable();
+      if (!T) return;
+      var now = performance.now();
+      for (var k in T){
+        var w = T[k];
+        if (!w || !w.originalEntity || !w.position) continue;
+        var oe = w.originalEntity;
+        if (oe.name === 'player' || oe.type === 'player') continue;
+        var d = DEFS.get(w);
+        if (d === undefined){
+          var g = findBones(w);
+          if (!g.legs.length) { DEFS.set(w, null); continue; }
+          d = {legs:null, arms:null, last:null, ph:Math.random()*6.28, mvE:0, bowK:0, bowT:0, bow:false, holdArm:null, hum:false};
+          capture(d, g);
+          if (!d.legs.length) { DEFS.set(w, null); continue; }
+          DEFS.set(w, d);
+          mobs++;
+          if (d.hum) W.__qAnim.hums++;
+          continue;                                    // 首帧只采样 default，不写
+        }
+        if (!d) continue;
+        var dt = d.last ? Math.min(0.1, (now - d.last.t) / 1000) : 0;
+        var px = w.position.x, pz = w.position.z;
+        var sp = d.last ? Math.hypot(px - d.last.x, pz - d.last.z) / Math.max(0.001, dt) : 0;
+        d.last = {x:px, z:pz, t:now};
+        var mv = Math.min(1, sp / 0.5);          // v11: 原版幅度——僵尸 0.35m/s -> mv=0.7 -> 臂 +-0.52rad(29度可见）
+        d.mvE = d.mvE * 0.7 + mv * 0.3;          // v10: EMA 平滑，防 tp/瞬移假速单帧爆幅
+        mv = d.mvE;
+        var run = mv > 0.55 ? 1.9 : 1;
+        if (mv > 0.02){ d.ph += dt * (5 + 7 * mv) * mv; W.__qAnim.walk++; }
+        else { d.ph += dt * 0.6; W.__qAnim.idle++; }
+        var sw = Math.sin(d.ph) * 0.85 * mv * run;   // v11: 腿 0.5->0.85 原版幅度
+        var aw = Math.sin(d.ph) * 0.75 * mv * run;   // v11: 臂 0.42->0.75 原版幅度
+        for (var i = 0; i < d.legs.length; i++){
+          var L = d.legs[i];
+          var cur = L.b.rotation.x;
+          if (Math.abs(cur - L.lw) > 0.03){ L.rx = cur; L.lw = cur; W.__qAnim.yield++; continue; }  // bundle 让位
+          var s;
+          if (/^leg\d$/.test(L.n)) s = (parseInt(L.n.slice(3), 10) % 2) === 1 ? -sw : sw;   // 四足对角
+          else s = (L.n === 'rightLeg') ? sw : -sw;                                          // 人形对角
+          var nv = mv > 0.02 ? clamp(L.rx + s, L.rx) : L.rx;
+          L.b.rotation.x = nv; L.lw = nv;
+        }
+        if (d.hum){
+          d.bowT++;
+          if (d.bowT % 30 === 1) d.bow = !!d.holdArm && hasBow(oe);
+          var want = d.bow ? 1 : 0;
+          d.bowK += (want - d.bowK) * Math.min(1, dt * 8);
+          if (d.bowK > 0.02) W.__qAnim.bow++;
+          for (var j = 0; j < d.arms.length; j++){
+            var A = d.arms[j];
+            var cur2 = A.b.rotation.x;
+            if (Math.abs(cur2 - A.lw) > 0.03){ A.rx = cur2; A.lw = cur2; W.__qAnim.yield++; continue; }  // bundle 让位
+            var nv2;
+            if (d.bowK > 0.03 && A.n === d.holdArm){
+              nv2 = A.rx - d.bowK * 1.5;
+            } else {
+              nv2 = mv > 0.02 ? clamp(A.rx + (A.n === 'rightArm' ? -aw : aw), A.rx) : A.rx;
+            }
+            A.b.rotation.x = nv2; A.lw = nv2;
+          }
+        }
+      }
+    }catch(e){ err++; W.__qAnim.err = err; if(err<=2){ try{ console.warn('q11err:', e && e.message); }catch(_){} } }
+    W.__qAnim.frames = frames; W.__qAnim.mobs = mobs;
+  }
+  var boot = setInterval(function(){
+    try{
+      var w = W.world;
+      if (w && w.scene && !w.scene.__q11){
+        w.scene.__q11 = 1; ready = 1;
+        var prev = w.scene.onAfterRender;               // 链式保留 bundle 可能已有的回调
+        w.scene.onAfterRender = function(r, s, c){
+          if (typeof prev === 'function') { try { prev(r, s, c); } catch(e){} }
+          tick();
+        };
+        clearInterval(boot);
+      }
+    }catch(e){}
+  }, 500);
+  setTimeout(function(){ clearInterval(boot); }, 150000);
+})();
+
+</script>
+<script>
+/* bubble-particles v7：原版气泡柱粒子 + 气泡柱环境音（v5 2026-10-25 挂载修正）
+   v4 死因（_diag8 实证 renderer.info.render.calls=2 恒定）：bundle 的 worldRenderer.render()
+   是手动调用各子系统 .render()，不走 three scene.traverse —— 直接 sc.add() 的裸 mesh
+   永远不进渲染管线（spawned/sphere 计数正常但肉眼不可见）。
+   v5：照 waypoints 同款官方路径——独立 bubbleScene + worldRenderer.onRender.push(pass)，
+   pass 内 renderer.autoClear=false → renderer.render(bubbleScene, camera) → 恢复。
+   （waypoints.render() = renderer.render(waypointScene, camera) 即 bundle 自身用法。）
+   保留 v4：depthTest=false 穿透 bundle 不透明水面；粒径 0.12；限流 10。 */
+(function(){
+  var items=[], geo=null, mat=null, MAX=220, err=0, cols=0;
+  window.__bubble={v:7, n:0, spawned:0, cols:0, err:0, inCol:0, colType:'', sndN:0, fbN:0};
+  function ensure(){
+    if(geo||!globalThis.THREE) return !!geo;
+    try{
+      geo=new THREE.SphereGeometry(0.12,8,8);
+      mat=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.85,depthWrite:false,depthTest:false});
+    }catch(e){}
+    return !!geo;
+  }
+  function wr(){ try{ return window.appViewer&&window.appViewer.backend&&window.appViewer.backend.soundSystem&&window.appViewer.backend.soundSystem.worldRenderer||null; }catch(e){ return null; } }
+  function bscene(){
+    try{
+      var W=wr(); if(!W) return null;
+      if(!W.__bubbleScene){ W.__bubbleScene=new (globalThis.THREE.Scene)(); }
+      return W.__bubbleScene;
+    }catch(e){ return null; }
+  }
+  function spawn(x,y,z,up,dist){
+    try{
+      if(!ensure()) return;
+      var sc=bscene(); if(!sc) return;
+      if(items.length>=MAX){ var old=items.shift(); if(old.m.parent) old.m.parent.remove(old.m); }
+      var m=new THREE.Mesh(geo,mat);
+      m.renderOrder=999;
+      m.frustumCulled=false;          // v7：气泡柱必现，防相机矩阵/朝向边缘情况被剔除
+      sc.add(m);
+      var life=Math.max(700, dist/1.2*1000*1.25+250)+Math.random()*300;
+      items.push({m:m, ax:x+(Math.random()-0.5)*0.25, ay:y, az:z+(Math.random()-0.5)*0.25, vy:up?1.2:-1.2, born:performance.now(), life:life});
+      window.__bubble.spawned++;
+    }catch(e){ err++; }
+  }
+  function blockAtSafe(b, base, x, y, z){ try { return b.blockAt ? b.blockAt(new base(x,y,z)) : null; } catch(e){ return null; } }
+  /* 柱型：'up'=涌流(灵魂沙,气泡上升) / 'down'=涡流(岩浆块,气泡下沉)。
+     优先 blockstate.drag（drag=true 即向下拖），取不到则向下走 14 格找源头块。 */
+  function colType(b, base, x, y, z, prDrag){
+    if(prDrag!=null) return prDrag?'down':'up';
+    for(var i=0;i<14;i++){
+      var blk=blockAtSafe(b, base, x, y-i, z);
+      if(!blk) break;
+      if(blk.name==='bubble_column') continue;
+      if(blk.name==='magma_block') return 'down';
+      if(blk.name==='soul_sand') return 'up';
+      break;
+    }
+    return 'up';
+  }
+  /* 原版主路：方块柱扫描（覆盖站在柱内/柱旁/柱上水面） */
+  function scanColumns(){
+    try{
+      var b=globalThis.bot; if(!b||!b.entity||!b.entity.position) return;
+      var bp=b.entity.position, base=bp.constructor||null;
+      var blockAt=b.blockAt?b.blockAt.bind(b):(b.world&&b.world.getBlock?b.world.getBlock.bind(b.world):null);
+      if(!blockAt||!base) return;
+      cols=0; var made=0;
+      var px=Math.floor(bp.x), py=Math.floor(bp.y), pz=Math.floor(bp.z);
+      for(var dx=-6;dx<=6&&made<10;dx++)for(var dz=-6;dz<=6&&made<10;dz++){
+        var cx=px+dx, cz=pz+dz, found=-1, prDrag=null, hasCol=false;
+        for(var yy=py+1;yy>=py-5;yy--){
+          var blk=blockAtSafe(b, base, cx, yy, cz);
+          if(blk&&blk.name==='bubble_column'){
+            found=yy; hasCol=true;
+            try{ var pr=blk.getProperties?blk.getProperties():{}; if(pr&&pr.drag!=null) prDrag=!!pr.drag; }catch(e){}
+            break;
+          }
+        }
+        if(!hasCol) continue;
+        cols++;
+        var up=(colType(b, base, cx, found, cz, prDrag)==='up');
+        var top=found+1, guard=0;
+        while(guard++<16){
+          var ab=blockAtSafe(b, base, cx, top, cz);
+          if(!ab||(ab.name!=='water'&&ab.name!=='bubble_column')) break;
+          top++;
+        }
+        if(Math.random()<0.6){
+          var h=up?(found+0.1+Math.random()*Math.max(0.3,top-found-0.2))
+                  :(found+0.2+Math.random()*Math.min(3,Math.max(0.5,top-found-0.3)));
+          var dist=up?(top-h):(h-found);
+          spawn(cx+0.5, h, cz+0.5, up, dist);
+          made++;
+        }
+      }
+      window.__bubble.cols=cols;
+    }catch(e){ err++; }
+  }
+  setInterval(scanColumns, 450);
+  /* 辅路：服务端 bubble 包（字段：position/offset 为 Vec3，id 可为字符串或数字） */
+  function hook(b){
+    if(b.__bubbleHooked) return; b.__bubbleHooked=1;
+    b.on('particle', function(p){
+      try{
+        if(!p) return;
+        var pid=p.id;
+        var isBub=(typeof pid==='string'&&pid.indexOf('bubble')!==-1)||(p.name&&String(p.name).indexOf('bubble')!==-1);
+        if(!isBub) return;
+        var pos=p.position||p, off=p.offset||{};
+        var up=((off.y!=null?off.y:0)>=0);
+        var n=Math.min(6, p.count||4);
+        for(var i=0;i<n;i++) spawn(pos.x, pos.y+Math.random()*0.25, pos.z, up, 1.5);
+      }catch(e){ err++; }
+    });
+  }
+  var t=setInterval(function(){ if(window.bot){ clearInterval(t); hook(window.bot); } },500);
+  setTimeout(function(){ clearInterval(t); },120000);
+
+  /* ===== v5 渲染 pass：挂 worldRenderer.onRender（waypoints 同款官方路径） ===== */
+  var lastT=performance.now(), passOn=0;
+  function pass(){
+    try{
+      var W2=wr();
+      var now=performance.now(), dt=Math.min(0.1,(now-lastT)/1000); lastT=now;
+      var so=W2&&W2.sceneOrigin;
+      for(var i=items.length-1;i>=0;i--){
+        var it=items[i];
+        if(so&&so.toSceneX){
+          it.m.position.set(so.toSceneX(it.ax), so.toSceneY(it.ay), so.toSceneZ(it.az));
+        }
+        it.m.position.y+=it.vy*dt;
+        it.m.position.x+=Math.sin(now/700+it.born)*0.04*dt*10;   // 极慢横向漂移
+        if(now-it.born>it.life){ if(it.m.parent) it.m.parent.remove(it.m); items.splice(i,1); }
+      }
+      window.__bubble.n=items.length; window.__bubble.err=err;
+      if(items.length){
+        if(!W2||!W2.renderer||!W2.camera) return;
+        var sc=W2.__bubbleScene; if(!sc) return;
+        var ac=W2.renderer.autoClear;
+        try{ W2.camera.updateMatrixWorld(); }catch(e){}
+        W2.renderer.autoClear=false;
+        W2.renderer.render(sc, W2.camera);
+        W2.renderer.autoClear=ac;
+      }
+    }catch(e){ err++; window.__bubble.err=err; }
+  }
+  var boot=setInterval(function(){
+    var W=wr();
+    if(W&&W.onRender&&!passOn){
+      passOn=1;
+      W.onRender.push(pass);
+      clearInterval(boot);
+    }
+  },500);
+  setTimeout(function(){ clearInterval(boot); },150000);
+
+  /* ===== 气泡柱原版环境音（仅轴内触发；上浮/下沉不同） ===== */
+  var S={cur:'',lastAmb:0};
+  function sndPlay(name, vol){
+    try{
+      var SB=window.__soundBridge;
+      if(SB&&SB.playAt){ if(SB.playAt(name, null, vol, 0.9+Math.random()*0.2)){ window.__bubble.sndN++; return true; } }
+    }catch(e){}
+    try{
+      var f=name.replace(/^minecraft:/,'').replace(/\./g,'/');
+      if(/ambient$/.test(f)){ var mx=(f.indexOf('whirlpool')!==-1)?3:5; f+=(1+Math.floor(Math.random()*mx)); }
+      var a=new Audio('/sounds/minecraft/sounds/'+f+'.mp3');
+      a.volume=Math.min(0.7, vol||0.4);
+      a.playbackRate=0.9+Math.random()*0.2;
+      var pr=a.play(); if(pr&&pr.catch)pr.catch(function(){});
+      window.__bubble.fbN++;
+    }catch(e2){}
+    return false;
+  }
+  function inColumn(){
+    try{
+      var b=globalThis.bot; if(!b||!b.entity||!b.entity.position) return null;
+      var bp=b.entity.position, base=bp.constructor||null;
+      if(!b.blockAt||!base) return null;
+      var px=Math.floor(bp.x), py=Math.floor(bp.y), pz=Math.floor(bp.z);
+      for(var dy=0;dy<=1;dy++){
+        var blk=blockAtSafe(b, base, px, py+dy, pz);
+        if(blk&&blk.name==='bubble_column'){
+          var prDrag=null;
+          try{ var pr=blk.getProperties?blk.getProperties():{}; if(pr&&pr.drag!=null) prDrag=!!pr.drag; }catch(e){}
+          return colType(b, base, px, py+dy, pz, prDrag);
+        }
+      }
+      return null;
+    }catch(e){ return null; }
+  }
+  setInterval(function(){
+    try{
+      var t2=inColumn(), now=Date.now();
+      if(t2){
+        window.__bubble.inCol=1; window.__bubble.colType=t2;
+        if(S.cur!==t2){ S.cur=t2; sndPlay(t2==='up'?'minecraft:block.bubble_column.upwards_inside':'minecraft:block.bubble_column.whirlpool_inside', 0.7); }
+        else if(now-(S.lastAmb||0)>2200+Math.random()*1800){
+          S.lastAmb=now;
+          sndPlay(t2==='up'?'minecraft:block.bubble_column.upwards_ambient':'minecraft:block.bubble_column.whirlpool_ambient', 0.32);
+        }
+      }else{
+        window.__bubble.inCol=0; window.__bubble.colType='';
+        if(S.cur){ S.cur=''; S.lastAmb=0; }
+      }
+    }catch(e){ err++; }
+  },400);
+})();
+</script>
+
+
+
+<script>
+/* perf-guard v1：低配自动降档（Alec 10-25："整体卡，优化客户端/网络/服务端，别优化我电脑"）
+   ① WebGL 软件渲染检测（SwiftShader/llvmpipe/软件光栅）→ 立即降有效渲染距离 + 降像素比
+      （动态分辨率：软件渲染下片段开销减半以上；DOM UI 不受影响）
+   ② 帧时看门狗：2s 窗均帧 >45ms 且当前有效距离 >3 → 逐级降（0.7 步进，下限 3），只降不升
+   ③ 与 bundle 原生 autoLowerRenderDistance（25ms/0.8 步进）互补：同一字段，双方都只写小值
+   ④ 纯 console 诊断，零 UI（webmc 铁律 0）；window.__perf 可手动查询 */
+(function(){
+  var P = window.__perf = { v:1, soft:0, rd:0, base:0, fps:0, drops:0, pxr:0, err:0, ready:0 };
+  function log(){ try{ console.log.apply(console, arguments); }catch(e){} }
+  function wr(){ try{ var av=window.appViewer; return av&&av.backend&&av.backend.soundSystem&&av.backend.soundSystem.worldRenderer||null; }catch(e){ return null; } }
+  function cmm(){ var w=wr(); return w&&w.chunkMeshManager||null; }
+  function effRd(){ var c=cmm(); if(!c) return 0; return c.performanceOverrideDistance||w_viewDistance(); }
+  function w_viewDistance(){ var w=wr(); return (w&&w.viewDistance)||10; }
+
+  /* ---- ① 软件渲染检测：优先复用现存上下文，失败才开一次性画布 ---- */
+  function glInfo(){
+    try{
+      var av=window.appViewer, r=null;
+      if(av&&av.renderer&&typeof av.renderer.getContext==='function') r=av.renderer;
+      var w=wr(); if(!r&&w&&w.renderer&&typeof w.renderer.getContext==='function') r=w.renderer;
+      var gl=r?r.getContext():null;
+      if(!gl){ var cv=document.createElement('canvas'); gl=cv.getContext('webgl2')||cv.getContext('webgl'); }
+      if(!gl) return null;
+      var ext=null; try{ ext=gl.getExtension('WEBGL_debug_renderer_info'); }catch(e){}
+      var s=ext?(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)||''):(gl.getParameter(gl.RENDERER)||'');
+      return String(s);
+    }catch(e){ P.err++; return null; }
+  }
+  function isSoft(s){ return /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(s||''); }
+
+  function applyOverride(v, why){
+    var c=cmm(); if(!c) return;
+    var cur=c.performanceOverrideDistance||w_viewDistance();
+    if(v>=cur) return;                       // 只降不升
+    c.performanceOverrideDistance=v;
+    P.drops++; P.rd=v;
+    log('[perf] render distance %d -> %d (%s)', cur, v, why);
+  }
+
+  var boot=setInterval(function(){
+    var c=cmm(); if(!c) return;
+    clearInterval(boot); P.ready=1; P.base=w_viewDistance(); P.rd=effRd();
+    var info=glInfo();
+    log('[perf] GL renderer: '+(info||'unknown')+' | viewDistance='+P.base+' | eff='+P.rd);
+    if(info&&isSoft(info)){
+      P.soft=1;
+      var target=Math.max(4, Math.min(5, P.base-4));
+      applyOverride(target, 'software GL');
+      /* 动态分辨率：找得到 THREE renderer 才降像素比 */
+      try{
+        var av=window.appViewer, r=(av&&av.renderer&&typeof av.renderer.setPixelRatio==='function')?av.renderer:null;
+        var w=wr(); if(!r&&w&&w.renderer&&typeof w.renderer.setPixelRatio==='function') r=w.renderer;
+        if(r){
+          var cur=typeof r.getPixelRatio==='function'?r.getPixelRatio():1;
+          if(cur>0.7){ r.setPixelRatio(0.7); P.pxr=0.7; log('[perf] pixelRatio %.2f -> 0.70 (software GL dynamic res)', cur);
+            window.addEventListener('resize', function(){ try{ if(P.soft&&typeof r.getPixelRatio==='function'&&r.getPixelRatio()>0.7) r.setPixelRatio(0.7); }catch(e){} }); }
+        }
+      }catch(e){ P.err++; }
+    }
+  },1000);
+  setTimeout(function(){ clearInterval(boot); },120000);
+
+  /* ---- ② 帧时看门狗 ---- */
+  var last=performance.now(), acc=0, n=0, chk=performance.now(), bad=0;
+  function frame(){
+    requestAnimationFrame(frame);
+    try{
+      var now=performance.now(), dt=now-last; last=now;
+      if(dt>0&&dt<2000){ acc+=dt; n++; }
+      if(now-chk>=2000){
+        if(n){ P.fps=Math.round(1000/(acc/n)); }
+        var avg=n?acc/n:0;
+        if(avg>45){ bad++; } else { bad=0; }
+        if(bad>=3){                            // 连续 6s 都 >45ms（<22fps）
+          var cur=effRd();
+          if(cur>3){ applyOverride(Math.max(3, Math.floor(cur*0.7)), 'sustained '+Math.round(avg)+'ms frames'); }
+          bad=0;
+        }
+        acc=0; n=0; chk=now;
+      }
+    }catch(e){ P.err++; }
+  }
+  requestAnimationFrame(frame);
+  /* perfsum：每分钟一行 console 摘要——Alec 真机卡顿时 F12 看最后几行即可归因
+     （铁律0：只进 console，零 UI）。heap 线性不回落=泄漏；fps 低=渲染；ent 暴涨=实体。 */
+  setInterval(function(){
+    try{
+      var ent=0;
+      try{ var w=window.world; ent=w&&w.entities&&w.entities.entities?Object.keys(w.entities.entities).length:0; }catch(e){}
+      var q=globalThis.__qAnim||{}, bb=globalThis.__bubble||{}, it=globalThis.__itemFix||{};
+      log('[perf] fps='+P.fps+' rd='+P.rd+' soft='+P.soft+' heap='+(performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576):-1)+'MB ent='+ent+' anim='+q.frames+'(w'+q.walk+'/i'+q.idle+'/y'+q.yield+') bub='+bb.n+'/'+bb.spawned+' itemfix='+(it.cleared||0));
+    }catch(e){ P.err++; }
+  }, 60000);
+  log('[perf] guard v1 armed (auto software-detect + frame watchdog + perfsum)');
+})();
+</script>
+<script>
+/* patch-version v1：F12 console 一行汇总补丁版本（普通刷新后即可判定是否最新） */
+(function(){
+  setTimeout(function(){
+    try{
+      var v=[];
+      var q=globalThis.__q13; v.push('q13='+(q&&q.active?'on':'off'));
+      var a=globalThis.__qAnim; v.push('qAnim='+(a?a.v:'off'));
+      var b=window.__bubble; v.push('bubble='+(b?b.v:'off'));
+      var s=window.__soundBridge; v.push('sound='+(s?s.version:'off'));
+      v.push('q13v6=on|eat2=on|itemfix=on|bub5fix=on|anim11=on|perf1=on');
+      v.push('build=20261024o');
+      console.log('%c[webmc-patch] '+v.join(' | '),'background:#165;color:#fff;padding:2px 8px;border-radius:3px');
+      window.__patchVer=v.join('|');
+    }catch(e){}
+  },6000);
+})();
+</script>
+
+</body>
+</html>
