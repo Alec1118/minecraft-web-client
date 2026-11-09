@@ -88,12 +88,25 @@ node _diag15.js   # 白天气泡柱截屏 + 僵尸行走摆幅 + heap
   客户端只渲染真实存在的柱——扫到柱 = 服务端已判静水有效。
 - 渲染路径同 v7（独立 bubbleScene + onRender + sceneOrigin 相对坐标 + frustumCulled=false）。
 
-### q-anim v12（"手臂飞出去"根因修复）
-**根因**：用 wrapper 场景坐标测速——玩家跨区块时 `sceneOrigin` 平移 → 所有 wrapper position
-跳变 → 速度瞬间爆表 → 摆幅 0.85×1.9≈±1.6rad 甩过头顶（"飞出去但角度对"）。
-修复：改用 `originalEntity.position`（mineflayer 世界坐标，无 sceneOrigin 跳变）+ sp>4m/s 瞬移保护。
-非人形：蝙蝠 `bone_rightWing/leftWing` 扇翅（rotation.z，WingTip 子骨自动跟随）；
-四足/蜘蛛/苦力怕 `bone_leg0-7` 奇偶交替步态（v11 已有，本轮实测骨骼名）。
+### q-anim v12（r42–r127 / 运行标记 v119）
+
+> 文件名沿用 `src/qanim_v12.js`，但内容已演进到 r42–r127（标记 v119）。三类分治：
+> 人形（zombie/skeleton/villager…）、四足（cow/pig/sheep/horse/spider…）、其他（squid/bat/bee…）。
+
+**设计铁律（Alec 拍板）**：以生物静止姿态为基准，动画只写 `rotation`（腿/臂 rotation.x、翅膀/触手 rotation.z），
+**绝不碰 position**（r64 删掉 v45 的“每帧把骨骼 position 拉回静止”——那段会把原版 molang 动画整体冻住）。
+reRig 只修“绝对 pivot 嵌套”导致的旋转中心抬高（r49/r51 数学闭环），不平移骨骼。
+
+**r127 幅度随速度缩放（治“动起来就满幅行军感”）**：
+- 旧：`targetMove = sp>0.1?1:0` + `mb` 二值混合 → 任何移动都满幅摆（慢走也 28° 大摆，像行军）。
+- 新：`targetMag = min(1, sp/0.5)`（24 帧环形缓冲平滑后再 dt*12 二次平滑）→ 慢走小摇、快走大摆，
+  静止 mb→0 腿/臂回落到 rx 静止基准（“静止时每个都没问题”）。
+- 四足基础幅度统一 0.45（去掉旧 `0.35+sp*0.04` 与 mb 的速度双重缩放，避免低速过僵）。
+- 步态：四足按 `sx===sz`（x>0 与 z<0 同号）对角配对 = 前左+后右 / 前右+后左 同相（原版对角小跑）；
+  人形左腿与左臂反相（同侧腿臂相反），僵尸/骨骼系才摆臂（原版铁律，村民/末影人不摇）。
+
+非人形：蝙蝠 `rightWing/leftWing` 扇翅（rotation.z，WingTip 子骨自动跟随）；bee `wing_bone` 同式；
+触手 `tentacle\d` 小相位独立摆动。
 
 ### q-shieldpose v1（主右副左）
 bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居中）且永远抬右手。
