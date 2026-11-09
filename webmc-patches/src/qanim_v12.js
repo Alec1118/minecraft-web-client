@@ -19,8 +19,8 @@
   }
   var DEFS = new WeakMap();
   var frames = 0, mobs = 0, walk = 0, idle = 0, err = 0;
-  W.__qAnim = {v:122, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
-  try { console.log('[qAnim] v93 | r131 蝙蝠翅膀枢轴修复(oth也reRig)/猪羊对角步态(左上右下)/水母触手增强 | build=20261101w'); } catch(_){}
+  W.__qAnim = {v:123, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
+  try { console.log('[qAnim] v94 | r132 蝙蝠翅膀枢轴修复(oth也reRig)/猪羊对角步态(左上右下)/水母触手增强 | build=20261101x'); } catch(_){}
 
   function findBones(w){
     var legs = [], arms = [], tents = [], wings = [], all = [];
@@ -237,7 +237,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
             else if (ln === 'bone_leftitem' || ln === 'leftitem') ib.position.set(1, -7, 1);
           });
           if (!g0.legs.length && !g0.arms.length && !g0.tents.length && !g0.wings.length){ DEFS.set(w, null); continue; }
-          d = {legs:null, arms:null, tents:null, wings:null, last:null, hist:null, ph:0, phB:0, phS:0, mb:0, hum:false, cls:(isHum?'hum':(isQuad?'quad':(isSpider?'spider':'oth')))};
+          d = {si:((W.__qAnim._n = (W.__qAnim._n || 0) + 1) & 255), legs:null, arms:null, tents:null, wings:null, last:null, hist:null, ph:0, phB:0, phS:0, mb:0, hum:false, cls:(isHum?'hum':(isQuad?'quad':(isSpider?'spider':'oth')))};
           capture(d, g0);
           d.hum = isHum;
           DEFS.set(w, d); mobs++;
@@ -250,7 +250,12 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
            动画/可见性恢复全停。改用 bot.entity.position（本地玩家坐标）做 LOD 锚点。 */
         var _pp = (W.bot && W.bot.entity && W.bot.entity.position) || null;
         if (_pp){ var qdx = oep.x - _pp.x, qdz = oep.z - _pp.z; if (qdx*qdx + qdz*qdz > 4096) continue; }
-        if (animThisTick >= 12) continue;
+        /* r132：预算公平化——原实现每帧只服务插入序前12只，僵尸成群时队尾永远饿死=走路没动画。
+   改为：全局轮转 _rr 每帧自增，(稳定序si+_rr)&7===7 的实体轮流跳过1/8帧；
+   跳过/超预算者累计 d.owe(上限0.3s)，下次服务时一次性补偿相位，动画时间线不中断。 */
+        var _rr = W.__qAnim._rr = ((W.__qAnim._rr || 0) + 1) & 63;
+        if (animThisTick >= 20 || (((d.si || 0) + _rr) & 7) === 7){ d.owe = Math.min(0.3, (d.owe || 0) + Math.min(0.1, (now - (d.seen || now)) / 1000)); d.seen = now; continue; }
+        d.seen = undefined;
         /* r64：删掉 v45 的"每帧把骨骼 position 强制拉回静止"——那段把原版 molang 动画
            （僵尸头/身摆动、村民手臂等）整体冻住=你看到"僵尸改坏/怪"。r42 没有这段=正常。
            现在只做加法旋转（腿/臂摆），其余骨骼交给原版动画自由播放。reRig 保留(r42 就有)。
@@ -276,9 +281,9 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
         d.mb += (targetMag - d.mb) * Math.min(1, dt * 12);
         var mb = d.mb;
         if (!isFinite(mb)) mb = 0;
-        if (animThisTick < 12) {
+        if (animThisTick < 20) {
           animThisTick++;
-          d.ph += dt * (2.5 + sp * 1.7) * mb; /* r125: 步频统一∝实际速度(人形原来写死8=滑步根因)，四足沿用 r118 公式 */
+          d.ph += (dt + (d.owe || 0)) * (2.5 + sp * 1.7) * mb; d.owe = 0; /* r125: 步频统一∝实际速度(人形原来写死8=滑步根因)，四足沿用 r118 公式 */
         var t = d.ph;
         d.phB += dt * 26;
         d.phS += dt * 2.4; /* r130 触手摆速 */
