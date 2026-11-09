@@ -19,8 +19,8 @@
   }
   var DEFS = new WeakMap();
   var frames = 0, mobs = 0, walk = 0, idle = 0, err = 0;
-  W.__qAnim = {v:120, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
-  try { console.log('[qAnim] v91 | r129 物种分治:苦力怕整只跳过(脚不动)/蜘蛛8足独立步态/reRig旋转补偿(羊猪腿枢轴修复) | build=20261101u'); } catch(_){}
+  W.__qAnim = {v:121, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
+  try { console.log('[qAnim] v92 | r130 蝙蝠翅膀枢轴修复(oth也reRig)/猪羊对角步态(左上右下)/水母触手增强 | build=20261101v'); } catch(_){}
 
   function findBones(w){
     var legs = [], arms = [], tents = [], wings = [], all = [];
@@ -123,10 +123,15 @@ try{
   function capture(d, g){
     /* 官方 _captureDefaults：只记默认姿态，动画=复位+加法；v45 铁律(v19 复活)：位置以静止为标准 */
     d.all   = g.all;
-    d.legs  = g.legs.map(function(l){ return {b:l.b, n:l.n, kind:l.kind, rx:l.b.rotation.x, sx:l.b.position.x>0, sz:l.b.position.z<0}; });
+    d.legs  = g.legs.map(function(l){ return {b:l.b, n:l.n, kind:l.kind, rx:l.b.rotation.x, sx:l.b.position.x>0, sz:l.b.position.z<0, sy:l.b.position.y>0}; });
     d.arms  = g.arms.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x, rz:l.b.rotation.z}; });
     d.tents = g.tents.map(function(l){ return {b:l.b, n:l.n, rx:l.b.rotation.x}; });
     d.wings = g.wings.map(function(l){ return {b:l.b, n:l.n, kind:l.kind, rz:l.b.rotation.z}; });
+    /* r130 前后轴判定：旋转 body 模型（猪/羊/牛，body rot.x≈-1.57）reRig 旋转补偿后
+       前后=local y 符号（y 有+有-才用 y 配对）；未旋转模型 y 全负 → 沿用 z 配对 */
+    var _py = 0;
+    for (var _i = 0; _i < d.legs.length; _i++) _py += d.legs[_i].sy ? 1 : -1;
+    d.fy = (_py !== 0 && Math.abs(_py) < d.legs.length);
   }
 
   var __qAnimLastTick = 0;
@@ -221,7 +226,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
              相对化是平移合成，过旋转父级=骨骼原点被搬离真关节（猪腿原点被抬到 y≈24px，真髋在 y≈6px），
              rebind 后静止看着正常，但旋转枢轴错=一摆腿就脱离身体/穿模。此类保持 bundle 原生枢轴（真关节）。 */
           var _rigged = false;
-          if (!isOth){ reRig(w); _rigged = true; } /* r129 旋转补偿后全模型统一 reRig（撤 r126 rotParent 门槛） */
+          reRig(w); _rigged = true; /* r130 蝙蝠/水母等 oth 也 reRig（旋转补偿已闭环，修翅膀/触手绕错枢轴偏出身体） */
           /* itemfix-bone v1（r124）：bundle 内置几何 rightItem pivot 是坏值 [-1,-45,-5]（原版= [-6,15,1]），
              reRig 相对化后 item 骨在手臂下方 45~67px → 弓/剑掉到脚下。归位到手上（vanilla 相对偏移）。
              必须在 reRig 之后改：reRig 只减父枢轴一次，改后的值不再被动。qAnim 每帧只写 rotation，位置可保。 */
@@ -276,7 +281,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
           d.ph += dt * (2.5 + sp * 1.7) * mb; /* r125: 步频统一∝实际速度(人形原来写死8=滑步根因)，四足沿用 r118 公式 */
         var t = d.ph;
         d.phB += dt * 26;
-        d.phS += dt * 1.6;
+        d.phS += dt * 2.4; /* r130 触手摆速 */
         if (mb > 0.05) walk++; else idle++;
         var sL = Math.sin(t), sR = Math.sin(t + Math.PI);
         var _amp = (d.cls === 'spider') ? 0.28 : ((d.cls === 'quad') ? 0.45 : 0.5); /* r129 蜘蛛小幅独立步态 */ /* r127：基础幅度统一，速度缩放交给 mb（避免双重缩放） */
@@ -285,6 +290,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
           var L = d.legs[i], s;
           if (L.kind === 'biped') s = (L.n === 'leftLeg') ? sL : sR;
           else if (d.cls === 'spider') s = ((i & 1) === 0) ? sL : sR; /* r129 蜘蛛8足左右交替 */
+          else if (d.fy) s = (L.sx !== L.sy) ? sL : sR; /* r130 猪羊对角步态：左上+右下 / 右上+左下 */
           else s = (L.sx === L.sz) ? sL : sR;
           L.b.rotation.x = L.rx + s * _amp * mb;
         }
@@ -305,7 +311,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
         /* 官方无人形以外步态：触手/翅膀保留小幅独立相位 */
         for (var q = 0; q < d.tents.length; q++){
           var TN = d.tents[q];
-          TN.b.rotation.x = TN.rx + Math.sin(d.phS + q * 0.6) * 0.18;
+          TN.b.rotation.x = TN.rx + Math.sin(d.phS + q * 0.7) * 0.32; /* r130 触手幅度加大 */
         }
         for (var wi = 0; wi < d.wings.length; wi++){
           var WG = d.wings[wi];
