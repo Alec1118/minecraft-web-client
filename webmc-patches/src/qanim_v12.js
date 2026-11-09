@@ -19,8 +19,8 @@
   }
   var DEFS = new WeakMap();
   var frames = 0, mobs = 0, walk = 0, idle = 0, err = 0;
-  W.__qAnim = {v:121, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
-  try { console.log('[qAnim] v92 | r130 蝙蝠翅膀枢轴修复(oth也reRig)/猪羊对角步态(左上右下)/水母触手增强 | build=20261101v'); } catch(_){}
+  W.__qAnim = {v:122, frames:0, mobs:0, hums:0, walk:0, idle:0, bow:0, err:0, rig:0};
+  try { console.log('[qAnim] v93 | r131 蝙蝠翅膀枢轴修复(oth也reRig)/猪羊对角步态(左上右下)/水母触手增强 | build=20261101w'); } catch(_){}
 
   function findBones(w){
     var legs = [], arms = [], tents = [], wings = [], all = [];
@@ -290,7 +290,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
           var L = d.legs[i], s;
           if (L.kind === 'biped') s = (L.n === 'leftLeg') ? sL : sR;
           else if (d.cls === 'spider') s = ((i & 1) === 0) ? sL : sR; /* r129 蜘蛛8足左右交替 */
-          else if (d.fy) s = (L.sx !== L.sy) ? sL : sR; /* r130 猪羊对角步态：左上+右下 / 右上+左下 */
+          else if (d.fy) s = (L.sx === L.sy) ? sL : sR; /* r131 对角修正：补偿后前后=local y 符号，sx===sy → 左上+右下/右上+左下（r130 !== 实测=同侧顺拐） */
           else s = (L.sx === L.sz) ? sL : sR;
           L.b.rotation.x = L.rx + s * _amp * mb;
         }
