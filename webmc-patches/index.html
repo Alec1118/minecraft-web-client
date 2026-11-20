@@ -6256,7 +6256,13 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
       if(!t||!ud._lerpOn){ kill.push(Q); return; }
       var pt=t._pt, tt=t._t, px=t._px, py=t._py, pz=t._pz, tx=t.x, ty=t.y, tz=t.z;
       if(!(pt!=null&&tt>pt)){ Q.position.set(tx,ty,tz); return; }
-      var a=(now-pt)/(tt-pt); if(!(a>0))a=0; if(a>1)a=1;
+      /* v8: 延迟线性插值。v6 用 a=(now-pt)/(tt-pt)，driver 在包到达后跑(now>=tt) ⇒ a 恒 clamp 到 1
+         → 每帧直接贴最新包=20Hz阶梯跳变(走路3x帧位移/掉落2.8x)。v8 改为包到达后(now-tt)在一个
+         平滑包周期(EMA)内从旧位置 px 匀速走到新位置 tx，落后一个包≈连续且无稳态滞后。 */
+      var raw=tt-pt; if(!(raw>0)||raw>300) raw=50;  /* 攒包/大跳丢弃，防抖动 */
+      var ema=t._ema==null?raw:(t._ema*0.75+raw*0.25); t._ema=ema;  /* 平滑包间隔 */
+      var per=Math.max(40,Math.min(ema,100));
+      var a=(now-tt)/per; if(!(a>0))a=0; if(a>1)a=1;
       var ex=px+(tx-px)*a, ey=py+(ty-py)*a, ez=pz+(tz-pz)*a;
       if(!Number.isFinite(ex+ey+ez)){ kill.push(Q); return; }
       Q.position.set(ex,ey,ez);
@@ -6267,7 +6273,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
   }
   globalThis.__entLerpDrive=driver;
   (function(){ function _loop(){ driver(); requestAnimationFrame(_loop); } requestAnimationFrame(_loop); })();
-  console.log('[entlerp] v6 rAF loop started (lerp-packets)');
+  console.log('[entlerp] v8 rAF loop started (delayed-linear + EMA per, fix 3x jump)');
   (function(){ var _pl=0,iv=setInterval(function(){ if(_pl){ clearInterval(iv); return; } try{ var w=globalThis.appViewer.backend.soundSystem.worldRenderer; if(w&&w.renderer&&w.scene&&w.camera){ _pl=1; setTimeout(function(){ try{ w.renderer.compile(w.scene,w.camera); console.log('[entlerp] scene material preheat done'); }catch(e){} },2500); } }catch(e){} },500); setTimeout(function(){ clearInterval(iv); },150000); })();
 })();
 </script>
