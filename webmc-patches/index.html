@@ -3684,30 +3684,38 @@ window.__vpick = function(table, ver){
     if (p.x !== undefined) return p;
     return null;
   }
+  // eatfx v2: shared geo + material cache + single rAF for all particles
+  var GEO = null, MATS = {}, LIVE = [], LOOPON = false;
+  function getGeo() { if (!GEO) GEO = new THREE.BoxGeometry(0.055, 0.055, 0.055); return GEO; }
+  function getMat(col) { var m = MATS[col]; if (!m) m = MATS[col] = new THREE.MeshBasicMaterial({ color: col }); return m; }
+  function loop() {
+    if (!LIVE.length) { LOOPON = false; return; }
+    requestAnimationFrame(loop);
+    if (!window.__v25Gate('fall', 33)) return;
+    var now = performance.now();
+    for (var i = LIVE.length - 1; i >= 0; i--) {
+      var d = LIVE[i];
+      if (now - d.t0 > 900 || !d.mesh.parent) {
+        if (d.mesh.parent) d.scene.remove(d.mesh);
+        LIVE.splice(i, 1); continue;
+      }
+      d.mesh.position.x += d.vx; d.mesh.position.y += d.vy; d.mesh.position.z += d.vz; d.vy -= 0.0035;
+    }
+  }
   function spawn(pos, item) {
     var W = wr(); if (!W || !W.sceneOrigin || !window.THREE) { F.miss++; return; }
     var col = COLORS[(item || '').replace(/^minecraft:/, '')] || 0x8a5a2b;
     var n = 0;
     for (var i = 0; i < 8; i++) {
       try {
-        var geo = new THREE.BoxGeometry(0.055, 0.055, 0.055);
-        var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: col }));
+        var mesh = new THREE.Mesh(getGeo(), getMat(col));
         W.sceneOrigin.add(mesh);
         mesh.position.set(pos.x + (Math.random() - 0.5) * 0.55, pos.y - 0.4 + Math.random() * 0.4, pos.z + (Math.random() - 0.5) * 0.55);
-        var vx = (Math.random() - 0.5) * 0.06, vy = Math.random() * 0.05 + 0.02, vz = (Math.random() - 0.5) * 0.06;
-        var t0 = performance.now();
-        (function fall() {
-          requestAnimationFrame(fall);
-    if(!window.__v25Gate('fall',33)) return;
-          try {
-            var dt = performance.now() - t0;
-            if (dt > 900 || !mesh.parent) { if (mesh.parent) W.sceneOrigin.remove(mesh); return; }
-            mesh.position.x += vx; mesh.position.y += vy; mesh.position.z += vz; vy -= 0.0035;
-          } catch (e) {}
-        })();
+        LIVE.push({ mesh: mesh, scene: W.sceneOrigin, vx: (Math.random() - 0.5) * 0.06, vy: Math.random() * 0.05 + 0.02, vz: (Math.random() - 0.5) * 0.06, t0: performance.now() });
         n++;
       } catch (e) {}
     }
+    if (n && !LOOPON) { LOOPON = true; requestAnimationFrame(loop); }
     if (n) F.spawned++;
   }
   setInterval(function () {
