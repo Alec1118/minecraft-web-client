@@ -2,7 +2,7 @@
 
 对 zardoy/minecraft-web-client 构建产物（bundle `493.*.js` + `index.html`）的**运行时内联补丁**全集。
 所有补丁以 `<script>` 块内联进 `index.html`，no-store 即时生效，不改 bundle 本体。
-本目录 `index.html` 即线上部署版（build=20261024o，md5 `4d7cd83f61b2beca0ef915b29d978cc9`）。
+本目录 `index.html` 即线上部署版（2026-11-20 同步自 dist，md5 `b191cafe9a639b761b87b489c8a8476b`）。
 
 ## 部署方式
 
@@ -58,7 +58,7 @@ Alec 反馈"岩浆块水下音效有、没气泡"：
 
 ### 6. 其他在线补丁
 
-beacon v21d（信标光柱）/ login-guard（#508 登录锁）/ webgl-guard（渲染兜底）/ cleanui v1 / fwfix v4 / fwrender v7（烟花）/ qremote v1（远程动作）/ warmup 等——全部内联于 `index.html`。
+beacon v60（信标光柱）/ login-guard（#508 登录锁）/ webgl-guard（渲染兜底）/ cleanui v1 / fwfix v4 / fwrender v7（烟花）/ qremote v1（远程动作）/ warmup 等——全部内联于 `index.html`。
 
 ## 服务端配套（另仓 AlecTools）
 
@@ -117,3 +117,17 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 - _diag23：CDP 真实右键 → q16 `fired:1 blocked:0` → MouseManager `upi:7 sui:7` → use_item 发出 ✓
 - _diag26：气泡 v8b `cols=1 spawned=34 Sprite:1 bubbleCalls=73 err=0` ✓
 - _diag25：骨骼名实测 bat(Wing/WingTip)/cow(leg0-3)/skeleton(人形 camelCase) ✓
+
+## 第三轮（2026-11-20）— 信标光柱 beacon v60（对齐原版规则）
+
+线上 dist 全量同步回本目录 `index.html`（md5 `b191cafe9a639b761b87b489c8a8476b`），含以下修复：
+
+### beacon v60：激活/渲染两套判定统一到原版
+- `isClear()`（激活判定）补 `.replace('minecraft:','')` 去命名空间前缀：此前 blockAt 返回
+  `minecraft:beacon` 时匹配不到白名单，导致**信标上方叠信标被误判为不透明、整根熄灭**。
+  修复后信标/玻璃/玻璃板/树叶/水/熔岩正确穿透。
+- `isClear()` 与 `scanSegs()`（渲染判定）显式一致阻断 `tinted_glass` / `tinted_glass_pane`
+  （原版遮光玻璃透光但阻挡光柱），两套判定不再矛盾。
+- 不透明方块（石头/草方块等）阻断光柱；染色玻璃按 `floor((cur+new)/2)` 逐通道混色。
+- 单测 `test_v60_isclear.js`（提取真实函数体 mock）：11/11 通过。
+- 配套服务端：Paper `redstone-implementation` 保持 `VANILLA`（EIGENCRAFT 会破坏粘性活塞推/拉方块）。
