@@ -193,3 +193,20 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 - 三轮有头真机 A/B + 线上真机验证：四模式 gameMode=2 生效、版本1.21.7、种子123456789
   全部写入 detail；留空种子 8/8 唯一；单人皮肤库显示"单人/本地模式"；页面错误 0。
 - 部署：index CRLF 6422/6422；SWV 293→294；HTTP gzip 解压实证 ui13/sw1 内容全部命中。
+
+
+## v65 (2026-11-21) — 创建世界页视觉重构（原版样式/汉化/响应式）
+- 用户反馈 v64 的视觉问题（此前只测 DOM 数值漏掉）：Create world/Use Mods 英文、框跑到屏幕外、样式不统一。
+- **真机截图定位根因**（之前只看 DOM 数值是失误）：
+  - screen-content 是 column + flex-wrap:wrap，插入 3 行后内容超高 → 整列被 wrap 到右侧（取消/创建 l=1310/1910 全在屏外）。改 nowrap 后回屏内。
+  - 我手搓的绿框小按钮 ≠ 原生 button-KqXTeV（灰底/minecraft 10px/20px 高）。
+  - zh.js(chat14) 未翻译 Create world/Use Mods，需补丁补译。
+- **重构 webmc_singleworld.js**：
+  - 所有控件改用 nativeBtn()/nativeInput() 克隆原生节点 → 样式 100% 一致。
+  - nowrap 修复整列溢出；窄屏 form flex-wrap 让世界名/版本框换行不贴边。
+  - 紧凑布局：label inline、4模式一行(窄96px)、种子/随机/版本同一行、删 WIP 提示行 → 取消/创建可见无滚动遮挡。
+  - 汉化：Create world→创建世界、Use Mods→使用模组。
+  - 保留 v64 全部功能（四模式/crypto真随机/任意版本/单人皮肤判定）。
+- 三轮真机截图迭代(桌面1280+手机420) + 完整功能回归 + 线上真机验证全过：
+  四模式 gameMode=2、种子123456789、版本1.21.7 写入 detail，随机种子 8/8 唯一，单人皮肤库"单人/本地模式"，无英文残留，页面错误 0。
+- 部署：index 引用 sw1→sw2，CRLF 6422/6422，SWV 294→295，HTTP gzip 解压实证 nativeBtn/创建世界/使用模组/nowrap 全命中。
