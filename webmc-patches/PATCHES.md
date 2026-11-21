@@ -175,3 +175,21 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 \* r10 的 4 个 longtask 间隔 12s（地形加载），不再有原 3s 信标列队。
 上线：SWV 292→293；index.html CRLF 6421/6421；HTTP gzip 解压后 5 处标记实证全部命中。
 回退项均因测量噪声或引入新卡顿被丢弃，最终仅 v3 组合上线。
+
+
+## v64 (2026-11-21) — 单人创建世界页按原版重做 + 单人皮肤库"密码错误"根治
+- 主体 UI 在 7.3MB bundle（md5 与线上一致），按铁律不动 bundle；全部走外部补丁注入。
+- **根因1 单人皮肤"密码错误"**：线上 ui_menu v12g 用 `local=!bot.username` 判单人，
+  但单人世界 bot.username='wanderer' 非空 → 误判多人 → 走 `/skinapi/apply`(需密码) → 报错。
+  修：改用 singleworld 在 `singleplayer` 事件打的 `__alecSingle` 标记（只有单人派发该事件），
+  单人 → localStorage 分支，绝不碰 /skinapi/apply。
+- **根因2 种子不随机**：线上种子逻辑已被历史 #782 删光；恢复并改为
+  `crypto.getRandomValues`，留空每次派发都新随机、不写回不持久化（跨世界绝不重复）。
+  实测连续 8 次派发得 8 个不同种子。
+- **创建世界页**：注入四游戏模式 survival/creative/adventure/spectator（替换原 disabled 按钮）、
+  种子输入框(手填+🎲随机)、独立版本输入框(绕过 bundle 的 1.21.7 过滤，任意版本可选)、
+  响应式 flex-wrap；劫持 singleplayer detail 写入 gameMode/seed/version。
+- 新文件 `webmc_singleworld.js?v=sw1`；`webmc_ui_menu.js` v12g→v13。
+- 三轮有头真机 A/B + 线上真机验证：四模式 gameMode=2 生效、版本1.21.7、种子123456789
+  全部写入 detail；留空种子 8/8 唯一；单人皮肤库显示"单人/本地模式"；页面错误 0。
+- 部署：index CRLF 6422/6422；SWV 293→294；HTTP gzip 解压实证 ui13/sw1 内容全部命中。
