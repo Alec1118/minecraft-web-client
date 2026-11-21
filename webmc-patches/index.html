@@ -6297,6 +6297,7 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
 /* vprof v1: 每2s一行 [vprof] fps/drawcalls/tris/longtask/heap —— 取证专用 */
 (function(){
   if(globalThis.__vprof) return;
+  if(!/[?&]vprof=1/.test(location.search)&&location.hash.indexOf("vprof")<0) return;
   globalThis.__vprof={ver:1};
   var frames=0, t0=performance.now(), longMs=0;
   try{

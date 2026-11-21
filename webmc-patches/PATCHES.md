@@ -136,3 +136,7 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 - Language packs chat13/chat9 -> chat14/chat10: isServerValid rejects ws://, wss:// and any address containing /, so wss://aialec.cn/mcws is no longer sent to api.mcstatus.io (was 404 every minute).
 - Refreshed .gz after deploy: gzip_static served stale compressed JS until gzip -9 -k -f was rerun.
 - SWV 290 -> 291; index.html synced with live dist (md5 89aa738c188082d1fb4041dd40d46b4a).
+
+### v62 (2026-11-21)
+- vprof diagnostic timer now opt-in via ?vprof=1 or #vprof; production no longer scans chunk sectionObjects and console.logs every 2s. SWV 291 -> 292.
+- Cross-world render measurement: survival 32 entities / geo 193 / p95 150ms; AlecCity geo 24 / p95 83-100ms; pvp and parkour Multiverse spawns are in the void (need safe spawn coords).
