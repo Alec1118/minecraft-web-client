@@ -893,7 +893,7 @@ try{window.__stallProbe={v:1,stalls:0,max:0,off:1};globalThis.__perfSampler=1;gl
   }
 
   // ---------- v15 性能修复：信标集合增量维护，替代每 2 秒全图 findBlocks ----------
-  var KNOWN={}, LASTSCAN=0, SCAN_MS=2500, SCAN_R=(window.__qPerf&&window.__qPerf.knobs.scanR)||32, IDLE_MS=150, FIRST_SCAN=1; /* r134 加速：进游戏立即首扫(LASTSCAN=0)+单次确认；事件驱动 blockUpdate 保实时；IDLE 150ms 更跟手 */
+  var KNOWN={}, LASTSCAN=0, SCAN_MS=9000, SCAN_R=(window.__qPerf&&window.__qPerf.knobs.scanR)||32, IDLE_MS=150, FIRST_SCAN=1; /* r134 加速：进游戏立即首扫(LASTSCAN=0)+单次确认；事件驱动 blockUpdate 保实时；IDLE 150ms 更跟手 */
   var OFF={};
   // ★只读诊断：控制台敲 __beam.dump() 看光柱/已知信标/扫描半径
   window.__beam = S;
@@ -967,7 +967,7 @@ try{window.__stallProbe={v:1,stalls:0,max:0,off:1};globalThis.__perfSampler=1;gl
        切世界时脚下 9 列整体卸载重载→内容全变；走路最多滚 2~3 列→不误清。滞回要求新指纹连续 2 次(>800ms)一致且多数列已加载才判定。 */
     try{
       var wc3=bot.world;
-      if(wc3&&typeof wc3.getColumn==='function'&&pe2&&(!S._fpT||Date.now()-S._fpT>2000)){
+      if(wc3&&typeof wc3.getColumn==='function'&&pe2&&(!S._fpT||Date.now()-S._fpT>8000)){
         S._fpT=Date.now();
         var ncx=Math.floor(pe2.x/16), ncz=Math.floor(pe2.z/16), proms=[];
         for(var gx3=-1;gx3<=1;gx3++) for(var gz3=-1;gz3<=1;gz3++){ proms.push(wc3.getColumn(ncx+gx3,ncz+gz3)); }
@@ -1010,7 +1010,7 @@ try{window.__stallProbe={v:1,stalls:0,max:0,off:1};globalThis.__perfSampler=1;gl
       if(__pe){ var __dx=pp.x-__pe.x,__dy=pp.y-__pe.y,__dz=pp.z-__pe.z,__d2=__dx*__dx+__dy*__dy+__dz*__dz;
         if(__d2>360000){ pp.lastWhy='太远:'+Math.round(Math.sqrt(__d2)); try{ if(S.beams&&S.beams[key]) dropBeam(key); }catch(e){} continue; } }
       /* ★r36b 性能：光柱已存在且 1s 内查过 → 跳过本次 96 格遮挡重扫（blockAt 大头），1Hz 足够 */
-      if(S.beams[key]){ S._insp=S._insp||{}; if(S._insp[key]&&now-S._insp[key]<1000){ n++; continue; } S._insp[key]=now; }
+      if(S.beams[key]){ S._insp=S._insp||{}; if(S._insp[key]&&now-S._insp[key]<2500){ n++; continue; } S._insp[key]=now; }
       var r=inspect(bot,pp.x,pp.y,pp.z);
       pp.lastWhy=(r.lit===true)?'lit':(r.why||'挂起');
       if(r.lit===null){ if(S.beams[key]) n++; continue; }
@@ -1044,7 +1044,7 @@ try{window.__stallProbe={v:1,stalls:0,max:0,off:1};globalThis.__perfSampler=1;gl
       }
     }
     for(var k2 in S.beams){ if(!seen[k2]&&++S.beams[k2].miss>=5) dropBeam(k2); }
-    if(++S.tick%10===0){
+    if(++S.tick%40===0){
       var det=[]; for(var kk in KNOWN){ var q=KNOWN[kk]; det.push(kk+'['+(q.dim||'?')+' '+(q.lastWhy||'-')+']'); }
       log('已点亮信标:',n,'| 光柱:',Object.keys(S.beams).length,
           '| 已知信标:',Object.keys(KNOWN).length, det.join(' '),
@@ -1060,7 +1060,7 @@ try{window.__stallProbe={v:1,stalls:0,max:0,off:1};globalThis.__perfSampler=1;gl
     if(r==='ok'){loadTex();hookUpdates();S.force=1;LASTSCAN=0;tick();return;}
     if(++S.tried%5===0)log('等待:',r,'(第'+S.tried+'次)');
     if(S.tried%200===0)log('仍在等待:',r,'(第'+S.tried+'次)');
-  },1500);
+  },3000);
 })();
 </script>
 

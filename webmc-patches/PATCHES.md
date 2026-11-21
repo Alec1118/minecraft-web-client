@@ -140,3 +140,38 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 ### v62 (2026-11-21)
 - vprof diagnostic timer now opt-in via ?vprof=1 or #vprof; production no longer scans chunk sectionObjects and console.logs every 2s. SWV 291 -> 292.
 - Cross-world render measurement: survival 32 entities / geo 193 / p95 150ms; AlecCity geo 24 / p95 83-100ms; pvp and parkour Multiverse spawns are in the void (need safe spawn coords).
+
+
+## v63（2026-11-21）— 信标光柱脚本降频，根治 3 秒周期长任务（md5 a6cb866f）
+
+**根因（有头真机 + CDP Tracing 实锤）**：非 GC（30s 仅 1 次 MajorGC）、非渲染。
+`RunTask→TimerFire(timerId=5)→FunctionCall(script13:1056 col30)` 精确 3000ms 周期，
+每次 75–142ms。定位到 beam-boot 信标脚本（index.html 内联 473–1064 行）：
+- `setInterval(tick,1500)` 每轮 `tick()` 做 3×3 `getColumn`+81 次同步 `getBlockStateId`、
+  `inspect()` 每信标 96 格 `blockAt`、`bgScan()` 全图 `findBlocks`（自注释"210ms 元凶"）、
+  每 10 tick 遍历全部 sectionObjects 打日志。
+
+**修法（5 处，仅改频率不动逻辑，blockUpdate 事件仍即时点亮/熄灭）**：
+1. 主 tick interval 1500 → 3000ms
+2. 3×3 列指纹检测 2000 → 8000ms
+3. bgScan 全图 findBlocks SCAN_MS 2500 → 9000ms
+4. 已知光柱遮挡重扫间隔 1000 → 2500ms
+5. 诊断 log 遍历 sectionObjects 每 10 → 每 40 tick
+
+**10 轮有头真机 A/B（Intel Iris Xe，主城 AlecCity 25–45s/轮，serviceWorkers:block）**：
+
+| 轮次 | 方案 | ltN | ltSum | p99 | renderFps |
+|---|---|---|---|---|---|
+| r0 | 基线 | 9 | 695ms | 17 | 117.4 |
+| r1 | 信标4项降频 | 3 | 202ms | 34 | 116.2 |
+| r2 | 指纹30s（有害，回退）| 5 | 712ms | 66 | 77.5 |
+| r3 | r1+inspect2.5s（**采用**）| **2** | **121ms** | **17** | **119.8** |
+| r4 | idle compile（有害，回退）| 10 | 1334ms | 83 | 64.2 |
+| r5 | tick5s（回退）| 3 | 277ms | 17 | 118.9 |
+| r6 | cleanup15s（回退）| 4 | 361ms | 34 | 110.4 |
+| r7 | evprobe600ms（回退）| 4 | 446ms | 17 | 117.7 |
+| r10 | r3 长时45s 复验 | 4* | 283ms | 17 | 119.5 |
+
+\* r10 的 4 个 longtask 间隔 12s（地形加载），不再有原 3s 信标列队。
+上线：SWV 292→293；index.html CRLF 6421/6421；HTTP gzip 解压后 5 处标记实证全部命中。
+回退项均因测量噪声或引入新卡顿被丢弃，最终仅 v3 组合上线。
