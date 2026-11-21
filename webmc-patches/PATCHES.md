@@ -131,3 +131,8 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 - 不透明方块（石头/草方块等）阻断光柱；染色玻璃按 `floor((cur+new)/2)` 逐通道混色。
 - 单测 `test_v60_isclear.js`（提取真实函数体 mock）：11/11 通过。
 - 配套服务端：Paper `redstone-implementation` 保持 `VANILLA`（EIGENCRAFT 会破坏粘性活塞推/拉方块）。
+
+### v61 (2026-11-21)
+- Language packs chat13/chat9 -> chat14/chat10: isServerValid rejects ws://, wss:// and any address containing /, so wss://aialec.cn/mcws is no longer sent to api.mcstatus.io (was 404 every minute).
+- Refreshed .gz after deploy: gzip_static served stale compressed JS until gzip -9 -k -f was rerun.
+- SWV 290 -> 291; index.html synced with live dist (md5 89aa738c188082d1fb4041dd40d46b4a).
