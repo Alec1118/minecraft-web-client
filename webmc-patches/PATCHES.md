@@ -210,3 +210,28 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
 - 三轮真机截图迭代(桌面1280+手机420) + 完整功能回归 + 线上真机验证全过：
   四模式 gameMode=2、种子123456789、版本1.21.7 写入 detail，随机种子 8/8 唯一，单人皮肤库"单人/本地模式"，无英文残留，页面错误 0。
 - 部署：index 引用 sw1→sw2，CRLF 6422/6422，SWV 294→295，HTTP gzip 解压实证 nativeBtn/创建世界/使用模组/nowrap 全命中。
+
+
+## v66 (2026-11-22) — 创建世界界面按原版重构 + 存档损坏根治 + 完整闭环实测
+- 用户要求：全部按原版，不要自创4按钮；上网查证原版 Java Create New World = 三标签(游戏/世界/更多) + 点击循环切换按钮。
+- **界面重构**（webmc_singleworld.js v3）：三标签"游戏/世界/更多"，循环按钮
+  "游戏模式: 生存→极限→创造→冒险→旁观"、"难度: 和平→简单→普通→困难"、
+  "世界类型: 默认→超平坦→草原→空世界→所有方块→下界"，"允许作弊: 开启"(webmc硬编码)。
+  全部克隆原生 button-KqXTeV/input-Mraw77 样式；响应式(桌面/手机截图验证)。
+- **可生效字段(真机核实 window.localServer)**：gameMode 0/1/2/3/4、difficulty 0-3、
+  generation.name(6个真实支持值)、generation.options.seed、version。
+  不可生效(webmc限制,如实说明)：允许作弊硬编码开、生成结构/奖励箱无此概念 → 原版这些项不硬凑。
+- **种子"每次都一样" & 字符串种子损坏根治**：
+  - 用户填字符串种子(如 ALICE123)→ webmc BigInt 崩溃 → 世界损坏进不去(正是"损坏进不了"根因)。
+    修 normSeed()：纯数字直接用，字符串用 Java String.hashCode 转数字(贴近原版语义)。
+  - 留空种子 crypto 真随机，每次不同(实测 4 次随机不同)，重进后稳定一致。
+- ★**存档损坏根治(关键 bug)**：webmc 单人世界运行后 **不会自动写 level.dat**，
+  reload 后世界列表扫描 `tb.C4()` 返回 undefined → zh.js `levelDat` TypeError → 世界被标 broken 无法进入。
+  对照实验证实是 webmc/zh.js **既有 bug**(线上原样也复现，与补丁无关)。
+  修：补丁 setInterval 每6s + beforeunload 自动 `window.localServer.writeLevelDat()` 确保落盘。
+- **完整闭环实测**(线上真机，6 类型全过 6/6)：创建→配置→进世界→读 window.localServer 真实
+  seed/difficulty/gameMode/genName→执行 /seed→WASD走动→reload→世界列表不broken→双击存档重新进入→配置一致。
+  6 组合：生存/和平/默认+ALICE123、创造/普通/超平坦+随机、冒险/困难/草原+BOB456、
+  生存/简单/下界+随机、极限/困难/默认+CHARLIE789、旁观/普通/空世界+随机。
+- 部署：index sw2→sw3，SWV 295→296，CRLF 6422，HTTP gzip 解压实证 cycleRow/writeLevelDat/normSeed 全命中。
+  测试脚本 full_e2e_live.js(线上闭环)、full_e2e.js(A/B)、probe_* 系列(根因定位)。
