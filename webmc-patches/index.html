@@ -4387,6 +4387,10 @@ try{
         if (!w || !w.originalEntity || !w.position) continue;
         var oe = w.originalEntity;
         if (oe.name === 'player' || oe.type === 'player') continue;
+        /* r131: 掉落物/item 无骨架，后面 isOth 分支本就 DEFS.set(null) 跳过，
+           但此前已白做 frustumCulled 写入+距离计算+每32帧 traverse。提前早退省消耗。*/
+        var _ien0 = String(oe.name || oe.type || '').toLowerCase();
+        if (_ien0 === 'item' || _ien0 === 'item_frame') continue;
         var oep = oe.position;
         /* r75：reRig 改骨骼后几何包围球不再匹配实体位置 -> three 视锥把屏内生物误剔
            （表现=走近突然消失但还能打/远处闪烁）。生物 mesh 一律关视锥剔除。 */
@@ -5274,7 +5278,8 @@ var isHum = /zombie|skeleton|wither|piglin|villager|witch|evoker|vindicator|illu
       items.push({m:m, ax:x, ay:y, az:z, bot:y-0.6, top:y+0.6, vy:up?0.6:-0.4, ck:'', born:performance.now(), life:1200});
     }catch(e){ err++; }
   }
-  function blockAtSafe(b, base, x, y, z){ try { return b.blockAt ? b.blockAt(new base(x,y,z)) : null; } catch(e){ return null; } }
+  var _catv = null;
+  function blockAtSafe(b, base, x, y, z){ try { if(!_catv) _catv = new base(0,0,0); _catv.x=x; _catv.y=y; _catv.z=z; return b.blockAt ? b.blockAt(_catv) : null; } catch(e){ return null; } }
   /* 柱型：'up'=涌流(灵魂沙,气泡上升) / 'down'=涡流(岩浆块,气泡下沉)。
      优先 blockstate.drag（drag=true 即向下拖），取不到则向下走 14 格找源头块。 */
   function colType(b, base, x, y, z, prDrag){
