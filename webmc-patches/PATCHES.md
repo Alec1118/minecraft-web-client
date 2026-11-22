@@ -235,3 +235,24 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
   生存/简单/下界+随机、极限/困难/默认+CHARLIE789、旁观/普通/空世界+随机。
 - 部署：index sw2→sw3，SWV 295→296，CRLF 6422，HTTP gzip 解压实证 cycleRow/writeLevelDat/normSeed 全命中。
   测试脚本 full_e2e_live.js(线上闭环)、full_e2e.js(A/B)、probe_* 系列(根因定位)。
+
+
+## v67 (2026-11-22) — 去掉“更多”标签/伪世界类型，修作弊开关与单人皮肤实时生效
+- **查证**（Minecraft Wiki World_creation）：原版世界类型只有 默认/超平坦/巨型生物群系/放大化/单一生物群系/(调试模式)；
+  bundle `16637` 生成器导出只有 grass_field/diamond_square/empty/superflat/all_the_blocks/nether，
+  且 `default→diamond_square`、`flat→superflat`。→ 只保留 **默认 / 超平坦**，删掉“草原/空世界/所有方块/下界”等非原版项。
+- **UI**：删掉整个“游戏/世界/更多”三标签（用户明确不要）；世界名+版本仍留原生顶部，
+  其余 4 项排成两列网格 + 种子独占一行；窄屏(<=560)改单列、随机按钮换行、取消/创建 wrapper 50% 防溢出（420 宽实测全在屏内）。
+- **允许作弊**：按钮文字改成仅 `开启`/`关闭`，可点击、可关闭；创建时写入 detail.allowCommands，
+  并在 level.dat 落盘后强制同步 `levelData.allowCommands`（实测关=0、开=1）。
+  注：webmc 本地服本身不按该字段做命令鉴权，这里保证存档设置与原版语义一致。
+- **单人皮肤实时生效**（根因）：`webmc_ui_menu.js` 本地分支只写 localStorage，并调用从未定义的 `window.__localSkin`；
+  同时 `webmc_skin.js` 每 10s 用 `/skinproxy/texture/wanderer` 覆盖回 Steve。
+  修：①`installLocalFetch()` 在单人通用离线名下把该 URL 重定向到本地预设 PNG 字节（也处理 `_cape`，无披风返回 404）；
+  ②`rendererApply()` 通过 webpack 方法表直调 `updatePlayerSkin(entityId, name, undefined, skinUrl, capeUrl)` 即时换肤，并同步物品栏预览；
+  ③打开皮肤库时从 localStorage 恢复并重贴。原“密码错误”不再出现。
+- **联机皮肤**：判断细化——单人且为通用离线名(wanderer/steve/alex)才走纯本地；若单人世界用的是真实账号，
+  仍走服务端皮肤库，联机对端可经 `/skinproxy/texture/<名>` 看到。纯离线皮肤的字节只在本浏览器，
+  跨客户端无法共享（浏览器隔离），自动化多客户端联机未连通，未做匿名服务端写入（安全考虑）。
+- 部署：index ui13→ui14 / sw3→sw4，SWV 296→298，CRLF 6422，gzip 三文件重刷，HTTP 解压实证。
+  真机验证 verify_live_v67.js 17/17 通过；mobile_v67.js 420 宽创建按钮 r=315<420。
