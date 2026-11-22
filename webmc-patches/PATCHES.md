@@ -264,3 +264,24 @@ bundle 举盾硬编码 `rightArm.position.set(0,.5,.12)`（x=0 拉回中线=居�
   每次 detail 传入值 == 实际世界 seed，确认随机真实生效。用户看到“固定种子”是重进同一存档所致，非创建随机失效。
 - 部署：index sw4→sw5，SWV 298→299，HTTP gzip 解压实证（ref sw5 / 无随机按钮 / placeholder / SWV299 全中）；
   真机 verify_live_v68b.js 18/18 通过，皮肤 1364/1364 字节一致。
+
+## v71 (2026-11-22) 6种生成器 + 极限模式禁作弊 + 联机根因修复
+- **生成器恢复 6 种**：深挖 bundle 模块 16637 发现 webmc 实际导出 `grass_field/diamond_square/empty/superflat/all_the_blocks/nether`。
+  v67 误以为只支持 2 种（把内部名当伪类型删了）是错的。现按各自真实地形命名：
+  默认(diamond_square)/超平坦(superflat)/草原(grass_field)/空世界(empty)/所有方块(all_the_blocks)/下界(nether)。
+  真机 6/6 全部创建成功，每种 49 区块 + 独立种子 + generatorName 正确，无错误。
+- **极限模式按原版禁作弊**：原 webmc `MODES` 里极限=gameMode 4；现极限时作弊按钮 disabled+显示"关闭"，
+  detail.allowCommands 强制 0、difficulty 强制 3(困难)、isHardcore=true、difficultyLocked=true，
+  level.dat.allowCommands 也强制 0。真机 10/10 通过；`__alecCheats()` 同样返回 0。
+- **联机根因（服务端修复，非前端补丁）**：两个客户端连不进的原理是 PeerJS `EXPIRE`——
+  webmc `ak()` 有 6s 超时 fallback 逻辑，`l = peerJsServerFallback && peer.options.host !== fallback`。
+  config.json 里 `peerJsServerFallback` 写成 `"https://aialec.cn"`（带协议），而 `parseUrl` 解析的 host 是纯 `aialec.cn`，
+  两者不等 → 6s 后误判切 fallback → destroy 刚建的 peer → join link 里的旧 id 失效 → EXPIRE。
+  修复：`/opt/mwc-web/dist/config.json` + `config.lan.json` 的 `peerJsServerFallback` 改为纯 host（`aialec.cn` / `192.168.10.157`），
+  刷新 config.json.gz。真机双独立 context 端到端实测：A 建房→复制加入链接→B 打开→A_PLAYERS 出现两人，联机成功。
+- **皮肤联机**：链路本就通——每个客户端按对方用户名走 `/skinproxy/texture/<名>` 拉皮肤，
+  主机 A 的 currentSkinUrls 里嘉宾实体 = skinproxy URL。离线默认名(guest/wanderer)没有绑皮肤会显示 Steve，
+  这非接口缺失而是 webmc 架构（皮肤按用户名从服务端取）。真实账号名走服务端皮肤库即可对端可见。
+- **种子实证**：连续多次留空创建得完全不同种子；地形方块签名哈希不同（e004f044 vs cb2b3707），
+  确认是真正不同的世界，不只是 seed 字段变化。
+- 部署：index sw5→sw6，SWV 299→300，HTTP gzip 解压实证；config 修复含 gzip 缓存刷新。
